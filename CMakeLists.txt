@@ -29,7 +29,7 @@ project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
-enable_language(C ASM)
+enable_language(C ASM CXX)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
@@ -43,14 +43,12 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 file(GLOB_RECURSE ALL_DRIVER_SOURCES 
-    "RocketDrivers/*.c"
-    "RocketDrivers/*.cc"
-    "RocketDrivers/*.cpp"
+    "RocketDrivers/tc_max31855_spi/*.cc"
 )
 
 # B. Recursively find all directories that contain .h files
 # (This allows you to include "header.h" directly, even if it's deep in a folder)
-file(GLOB_RECURSE ALL_DRIVER_HEADERS "RocketDrivers/*.h")
+file(GLOB_RECURSE ALL_DRIVER_HEADERS "RocketDrivers/tc_max31855_spi/*.h")
 set(ALL_DRIVER_INC_DIRS "")
 foreach(_headerFile ${ALL_DRIVER_HEADERS})
     get_filename_component(_dir ${_headerFile} DIRECTORY)

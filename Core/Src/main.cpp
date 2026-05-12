@@ -1,49 +1,50 @@
 #include "cpp_main.h"
 #include "main.h" // Access to HAL handles (huart1, etc.)
 
-#include <cmath>
-#include <cstring>
-#include <string>
-
 #include "crc.h"
 #include "tc_max31855_spi.h"
+
+#include <cmath>
+#include <cstdint>
 
 using namespace std; 
 
 // Define transmittable datastructures
 #pragma pack(push, 1)
-struct AdcData {
+//ADC outputs connected to the STM32F105 directly
+struct Stm32AdcData {
     uint32_t s4;
     uint32_t s5;
     uint32_t s6;
     uint32_t s7;
     uint32_t s8;
-    uint32_t pt0;
-    uint32_t pt1;
-    uint32_t pt2;
+    uint32_t s9;
+    uint32_t s10;
+    uint32_t s11;
     uint32_t pwr0;
-    uint32_t pwr1;
+    uint32_t pwr1;    
     uint32_t s0;
     uint32_t s1;
     uint32_t s2;
     uint32_t s3;
-    uint32_t pt3;
-    uint32_t pt4;
 };
 
 struct GseCommand {
     bool igniter0Fire;
     bool igniter1Fire;
     bool alarm;
-    bool solenoidStateGn2Fill;
-    bool solenoidStateGn2Vent;
-    bool solenoidStateGn2Disconnect;
-    bool solenoidStateMvasFill;
-    bool solenoidStateMvasVent;
-    bool solenoidStateMvasOpen;
-    bool solenoidStateMvasClose;
-    bool solenoidStateLoxVent;
-    bool solenoidStateLngVent;
+    bool solenoidState0;
+    bool solenoidState1;
+    bool solenoidState2;
+    bool solenoidState3;
+    bool solenoidState4;
+    bool solenoidState5;
+    bool solenoidState6;
+    bool solenoidState7;
+    bool solenoidState8;
+    bool solenoidState9;
+    bool solenoidState10;
+    bool solenoidState11;
     uint32_t crc;
 };
 
@@ -52,108 +53,90 @@ struct GseData {
     bool igniterArmed;
     bool igniter0Continuity;
     bool igniter1Continuity;
+
     bool igniterInternalState0;
     bool igniterInternalState1;
     bool alarmInternalState;
-    bool solenoidInternalStateGn2Fill;
-    bool solenoidInternalStateGn2Vent;
-    bool solenoidInternalStateGn2Disconnect;
-    bool solenoidInternalStateMvasFill;
-    bool solenoidInternalStateMvasVent;
-    bool solenoidInternalStateMvasOpen;
-    bool solenoidInternalStateMvasClose;
-    bool solenoidInternalStateLoxVent;
-    bool solenoidInternalStateLngVent;
-    float supplyVoltage0 = std::nanf("");
-    float supplyVoltage1 = std::nanf("");
-    float solenoidCurrentGn2Fill = std::nanf("");
-    float solenoidCurrentGn2Vent = std::nanf("");
-    float solenoidCurrentGn2Disconnect = std::nanf("");
-    float solenoidCurrentMvasFill = std::nanf("");
-    float solenoidCurrentMvasVent = std::nanf("");
-    float solenoidCurrentMvasOpen = std::nanf("");
-    float solenoidCurrentMvasClose = std::nanf("");
-    float solenoidCurrentLoxVent = std::nanf("");
-    float solenoidCurrentLngVent = std::nanf("");
-    float temperatureLox = std::nanf("");
-    float temperatureLng = std::nanf("");
-    float pressureGn2 = std::nanf("");
-    float pressureLoxInjTee = std::nanf("");
-    float pressureVent = std::nanf("");
-    float pressureLoxMvas = std::nanf("");
+    bool solenoidInternalState0;
+    bool solenoidInternalState1;
+    bool solenoidInternalState2;
+    bool solenoidInternalState3;
+    bool solenoidInternalState4;
+    bool solenoidInternalState5;
+    bool solenoidInternalState6;
+    bool solenoidInternalState7;
+    bool solenoidInternalState8;
+    bool solenoidInternalState9;
+    bool solenoidInternalState10;
+    bool solenoidInternalState11;
+
+    float supplyVoltage0    = std::nanf("");
+    float supplyVoltage1    = std::nanf("");
+    float solenoidCurrent0  = std::nanf("");
+    float solenoidCurrent1  = std::nanf("");
+    float solenoidCurrent2  = std::nanf("");
+    float solenoidCurrent3  = std::nanf("");
+    float solenoidCurrent4  = std::nanf("");
+    float solenoidCurrent5  = std::nanf("");
+    float solenoidCurrent6  = std::nanf("");
+    float solenoidCurrent7  = std::nanf("");
+    float solenoidCurrent8  = std::nanf("");
+    float solenoidCurrent9  = std::nanf("");
+    float solenoidCurrent10 = std::nanf("");
+    float solenoidCurrent11 = std::nanf("");
+    
+
     uint32_t crc;
 };
 #pragma pack(pop)
 
 // Add extern defined handles to peripheral interfaces defined in main.c
 extern ADC_HandleTypeDef hadc1;
-
 extern SPI_HandleTypeDef hspi3;
-
 extern TIM_HandleTypeDef htim4;
-
 extern TIM_HandleTypeDef htim5;
-
 extern UART_HandleTypeDef huart3;
-
 extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
-
-// TC handlers
-// (TC0 INOPERABLE)
-// (TC1 INOPERABLE)
-TcMax31855Spi tc2(&hspi3, TC2_nCS_GPIO_Port, TC2_nCS_Pin, 100);
-TcMax31855Spi tc3(&hspi3, TC3_nCS_GPIO_Port, TC3_nCS_Pin, 100);
-TcMax31855Spi tc4(&hspi3, TC4_nCS_GPIO_Port, TC4_nCS_Pin, 100);
-TcMax31855Spi tc5(&hspi3, TC5_nCS_GPIO_Port, TC5_nCS_Pin, 100);
-
-// solenoid internal states, these are energized state, not open or closed
-int solenoidState0;
-int solenoidState1;
-int solenoidState2;
-int solenoidState3;
-int solenoidState4;
-int solenoidState5;
-int solenoidState6;
-int solenoidState7;
-int solenoidState8;
-
-// igniter internal states
-int igniterState0;
-int igniterState1;
-
-// alarm
-int alarmState;
-
-// incoming command
-bool newCommand = false;
-uint8_t commandBuffer[sizeof(GseCommand)];
-GseCommand command;
 
 void cpp_main(void)
 {
-    HAL_GPIO_WritePin(ETH_nRST_GPIO_Port, ETH_nRST_Pin, GPIO_PIN_SET);
+    // incoming command
+    bool newCommand = false;
+    uint8_t commandBuffer[sizeof(GseCommand)];
+    GseCommand command;
+    GseData data;
+    TcMax31855Spi::Data tcData;
 
-    HAL_GPIO_WritePin(TC2_nCS_GPIO_Port, TC2_nCS_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(TC3_nCS_GPIO_Port, TC3_nCS_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(TC4_nCS_GPIO_Port, TC4_nCS_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(TC5_nCS_GPIO_Port, TC5_nCS_Pin, GPIO_PIN_SET);
+    // HAL_GPIO_WritePin(ETH_nRST_GPIO_Port, ETH_nRST_Pin, GPIO_PIN_SET);
 
-    solenoidState0 = 0;
-    solenoidState1 = 0;
-    solenoidState2 = 0;
-    solenoidState3 = 0;
-    solenoidState4 = 0;
-    solenoidState5 = 0;
-    solenoidState6 = 0;
-    solenoidState7 = 0;
-    solenoidState8 = 0;
+    // TC handlers
+    TcMax31855Spi tc0(&hspi3, TC0_CS_GPIO_Port, TC0_CS_Pin, 100);
+    TcMax31855Spi tc1(&hspi3, TC1_CS_GPIO_Port, TC1_CS_Pin, 100);
+    TcMax31855Spi tc2(&hspi3, TC2_CS_GPIO_Port, TC2_CS_Pin, 100);
 
-    igniterState0 = 0;
-    igniterState1 = 0;
+    tc0.Init();
+    tc1.Init();
+    tc2.Init();
 
-    alarmState = 0;
+    /* init state stuff*/
+    bool solenoidState0  = 0;
+    bool solenoidState1  = 0;
+    bool solenoidState2  = 0;
+    bool solenoidState3  = 0;
+    bool solenoidState4  = 0;
+    bool solenoidState5  = 0;
+    bool solenoidState6  = 0;
+    bool solenoidState7  = 0;
+    bool solenoidState8  = 0;
+    bool solenoidState9  = 0;
+    bool solenoidState10 = 0;
+    bool solenoidState11 = 0;
 
-    HAL_Delay(1000);
+    bool igniterState0 = 0;
+    bool igniterState1 = 0;
+
+    bool alarmState = 0;
+
 
     HAL_TIM_Base_Start(&htim4);
     HAL_TIM_Base_Start(&htim5);
@@ -163,59 +146,69 @@ void cpp_main(void)
     uint32_t usbBufferTimer = TIM5->CNT << 16 | TIM4->CNT;
 
     while (1) {
-        GseData data;
-
+        /*** Update time ***/
         uint32_t timestamp = TIM5->CNT << 16 | TIM4->CNT;
         data.timestamp = timestamp;
 
-        // update internal states
+        /*** Command GSE from ethernet ***/
+        // update internal states from new ethernet command
         if (newCommand) {
             newCommand = false;
 
-            solenoidState0 = (int)(command.solenoidStateGn2Fill);
-            solenoidState1 = (int)(command.solenoidStateGn2Vent);
-            solenoidState2 = (int)(command.solenoidStateGn2Disconnect);
-            solenoidState3 = (int)(command.solenoidStateMvasFill);
-            solenoidState4 = (int)(command.solenoidStateMvasVent);
-            solenoidState5 = (int)(command.solenoidStateMvasOpen);
-            solenoidState6 = (int)(command.solenoidStateMvasClose);
-            solenoidState7 = (int)(command.solenoidStateLoxVent);
-            solenoidState8 = (int)(command.solenoidStateLngVent);
-            igniterState0 = (int)command.igniter0Fire;
-            igniterState1 = (int)command.igniter1Fire;
-            alarmState = (int)command.alarm;
+            igniterState0       = command.igniter0Fire;
+            igniterState1       = command.igniter1Fire;
+            alarmState          = command.alarm;
+            solenoidState0      = command.solenoidState0;
+            solenoidState1      = command.solenoidState1;
+            solenoidState2      = command.solenoidState2;
+            solenoidState3      = command.solenoidState3;
+            solenoidState4      = command.solenoidState4;
+            solenoidState5      = command.solenoidState5;
+            solenoidState6      = command.solenoidState6;
+            solenoidState7      = command.solenoidState7;
+            solenoidState8      = command.solenoidState8;
+            solenoidState9      = command.solenoidState9;
+            solenoidState10     = command.solenoidState10;
+            solenoidState11     = command.solenoidState11;
         }
 
-        // internal states feedback
-        data.solenoidInternalStateGn2Fill = (bool)solenoidState0;
-        data.solenoidInternalStateGn2Vent = (bool)solenoidState1;
-        data.solenoidInternalStateGn2Disconnect = (bool)solenoidState2;
-        data.solenoidInternalStateMvasFill = (bool)solenoidState3;
-        data.solenoidInternalStateMvasVent = (bool)solenoidState4;
-        data.solenoidInternalStateMvasOpen = (bool)solenoidState5;
-        data.solenoidInternalStateMvasClose = (bool)solenoidState6;
-        data.solenoidInternalStateLoxVent = (bool)solenoidState7;
-        data.solenoidInternalStateLngVent = (bool)solenoidState8;
-        data.igniterInternalState0 = (bool)igniterState0;
-        data.igniterInternalState1 = (bool)igniterState1;
-        data.alarmInternalState = (bool)alarmState;
+        // update internal states feedback
+        data.igniterInternalState0      = igniterState0;
+        data.igniterInternalState1      = igniterState1;     
+        data.alarmInternalState         = alarmState;
+        data.solenoidInternalState0     = solenoidState0;
+        data.solenoidInternalState1     = solenoidState1;
+        data.solenoidInternalState2     = solenoidState2;
+        data.solenoidInternalState3     = solenoidState3;
+        data.solenoidInternalState4     = solenoidState4;
+        data.solenoidInternalState5     = solenoidState5;
+        data.solenoidInternalState6     = solenoidState6;
+        data.solenoidInternalState7     = solenoidState7;
+        data.solenoidInternalState8     = solenoidState8;
+        data.solenoidInternalState9     = solenoidState9;
+        data.solenoidInternalState10    = solenoidState10;
+        data.solenoidInternalState11    = solenoidState11;
 
         // switch solenoids
-        HAL_GPIO_WritePin(SOLENOID0_EN_GPIO_Port, SOLENOID0_EN_Pin, (GPIO_PinState)solenoidState0);
-        HAL_GPIO_WritePin(SOLENOID1_EN_GPIO_Port, SOLENOID1_EN_Pin, (GPIO_PinState)solenoidState1);
-        HAL_GPIO_WritePin(SOLENOID2_EN_GPIO_Port, SOLENOID2_EN_Pin, (GPIO_PinState)solenoidState2);
-        HAL_GPIO_WritePin(SOLENOID3_EN_GPIO_Port, SOLENOID3_EN_Pin, (GPIO_PinState)solenoidState3);
-        HAL_GPIO_WritePin(SOLENOID4_EN_GPIO_Port, SOLENOID4_EN_Pin, (GPIO_PinState)solenoidState4);
-        HAL_GPIO_WritePin(SOLENOID5_EN_GPIO_Port, SOLENOID5_EN_Pin, (GPIO_PinState)solenoidState5);
-        HAL_GPIO_WritePin(SOLENOID6_EN_GPIO_Port, SOLENOID6_EN_Pin, (GPIO_PinState)solenoidState6);
-        HAL_GPIO_WritePin(SOLENOID7_EN_GPIO_Port, SOLENOID7_EN_Pin, (GPIO_PinState)solenoidState7);
-        HAL_GPIO_WritePin(SOLENOID8_EN_GPIO_Port, SOLENOID8_EN_Pin, (GPIO_PinState)solenoidState8);
-
-        // igniter
-        data.igniterArmed = (bool)HAL_GPIO_ReadPin(ARMED_GPIO_Port, ARMED_Pin);
+        HAL_GPIO_WritePin(SOLENOID0_EN_GPIO_Port,   SOLENOID0_EN_Pin,   (GPIO_PinState)solenoidState0);
+        HAL_GPIO_WritePin(SOLENOID1_EN_GPIO_Port,   SOLENOID1_EN_Pin,   (GPIO_PinState)solenoidState1);
+        HAL_GPIO_WritePin(SOLENOID2_EN_GPIO_Port,   SOLENOID2_EN_Pin,   (GPIO_PinState)solenoidState2);
+        HAL_GPIO_WritePin(SOLENOID3_EN_GPIO_Port,   SOLENOID3_EN_Pin,   (GPIO_PinState)solenoidState3);
+        HAL_GPIO_WritePin(SOLENOID4_EN_GPIO_Port,   SOLENOID4_EN_Pin,   (GPIO_PinState)solenoidState4);
+        HAL_GPIO_WritePin(SOLENOID5_EN_GPIO_Port,   SOLENOID5_EN_Pin,   (GPIO_PinState)solenoidState5);
+        HAL_GPIO_WritePin(SOLENOID6_EN_GPIO_Port,   SOLENOID6_EN_Pin,   (GPIO_PinState)solenoidState6);
+        HAL_GPIO_WritePin(SOLENOID7_EN_GPIO_Port,   SOLENOID7_EN_Pin,   (GPIO_PinState)solenoidState7);
+        HAL_GPIO_WritePin(SOLENOID8_EN_GPIO_Port,   SOLENOID8_EN_Pin,   (GPIO_PinState)solenoidState8);
+        HAL_GPIO_WritePin(SOLENOID9_EN_GPIO_Port,   SOLENOID9_EN_Pin,   (GPIO_PinState)solenoidState9);
+        HAL_GPIO_WritePin(SOLENOID10_EN_GPIO_Port,  SOLENOID10_EN_Pin,  (GPIO_PinState)solenoidState10);
+        HAL_GPIO_WritePin(SOLENOID11_EN_GPIO_Port,  SOLENOID11_EN_Pin,  (GPIO_PinState)solenoidState11);
+        
+        // igniter read what has continuity/power
+        data.igniterArmed       =  (bool)HAL_GPIO_ReadPin(ARMED_GPIO_Port, ARMED_Pin);
         data.igniter0Continuity = !(bool)HAL_GPIO_ReadPin(EMATCH0_CONT_GPIO_Port, EMATCH0_CONT_Pin);
         data.igniter1Continuity = !(bool)HAL_GPIO_ReadPin(EMATCH1_CONT_GPIO_Port, EMATCH1_CONT_Pin);
 
+        // fire ignitors
         if (data.igniterArmed && igniterState0) {
             HAL_GPIO_WritePin(EMATCH0_FIRE_GPIO_Port, EMATCH0_FIRE_Pin, GPIO_PIN_SET);
         } else {
@@ -230,51 +223,47 @@ void cpp_main(void)
         // alarm
         HAL_GPIO_WritePin(ALARM_GPIO_Port, ALARM_Pin, (GPIO_PinState)alarmState);
 
-        // ADC operations
-        AdcData rawData = {0};
-        for (int i = 0; i < 16; i++) {
+
+        /*** Read sensors ***/
+        // All sensing pins are preconfigured to always send data, no matter if it's actually used during a test/launch
+
+        // STM32 ADC operations
+        Stm32AdcData rawData = {0};
+        for (int i = 0; i < sizeof(rawData) / sizeof(rawData.s4); i++) {
             HAL_ADC_Start(&hadc1);
             HAL_ADC_PollForConversion(&hadc1, 10);
             uint32_t data = HAL_ADC_GetValue(&hadc1);
             *(((uint32_t *)&rawData) + i) += data;
         }
 
-        data.pressureGn2 = 0.00128 * (float)rawData.pt0;                    // PT0 -> GN2 (5000 PSI)
-        data.pressureLoxInjTee =  0.00128 * (float)rawData.pt1;             // PT1 -> LOX pressure at the Tee
-        data.pressureVent = 0.00128 * (float)rawData.pt2;                   // PT2 -> Chamber/Vent pressure
-        data.pressureLoxMvas = 0.00128 * (float)rawData.pt3;                // PT3 -> LOX pressure at MVAS
-        (void)(0.00128f * (float)rawData.pt4);                              // UNUSED
-        data.solenoidCurrentGn2Fill = 0.000817f * (float)rawData.s0;        // S0 -> GN2 Fill
-        data.solenoidCurrentGn2Vent = 0.000817f * (float)rawData.s1;        // S1 -> GN2 Vent
-        data.solenoidCurrentGn2Disconnect = 0.000817f * (float)rawData.s2;  // S2 -> GN2 QD
-        data.solenoidCurrentMvasFill = 0.000817f * (float)rawData.s3;       // S3 -> MVAS Fill
-        data.solenoidCurrentMvasVent = 0.000817f * (float)rawData.s4;       // S4 -> MVAS Vent
-        data.solenoidCurrentMvasOpen = 0.000817f * (float)rawData.s5;       // S5 -> MVAS Open
-        data.solenoidCurrentMvasClose = 0.000817f * (float)rawData.s6;      // S6 -> MVAS Close
-        data.solenoidCurrentLoxVent = 0.000817f * (float)rawData.s7;        // S7 -> LOX Vent
-        data.solenoidCurrentLngVent = 0.000817f * (float)rawData.s8;        // S8 -> LNG Vent
-        data.supplyVoltage0 = 0.0062f * (float)rawData.pwr0 + 0.435f;
-        data.supplyVoltage1 = 0.0062f * (float)rawData.pwr1 + 0.435f;
-
+        // update transmit data struct
+        data.supplyVoltage0     = 0.0062f * (float)rawData.pwr0 + 0.435f;
+        data.supplyVoltage1     = 0.0062f * (float)rawData.pwr1 + 0.435f;
+        data.solenoidCurrent0   = 0.000817f * (float)rawData.s0;
+        data.solenoidCurrent1   = 0.000817f * (float)rawData.s1;
+        data.solenoidCurrent2   = 0.000817f * (float)rawData.s0;
+        data.solenoidCurrent3   = 0.000817f * (float)rawData.s1;
+        data.solenoidCurrent4   = 0.000817f * (float)rawData.s0;
+        data.solenoidCurrent5   = 0.000817f * (float)rawData.s1;
+        data.solenoidCurrent6   = 0.000817f * (float)rawData.s0;
+        data.solenoidCurrent7   = 0.000817f * (float)rawData.s1;
+        data.solenoidCurrent8   = 0.000817f * (float)rawData.s0;
+        data.solenoidCurrent9   = 0.000817f * (float)rawData.s1;
+        data.solenoidCurrent10  = 0.000817f * (float)rawData.s0;
+        data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
+        
         // read thermocouples
-        TcMax31855Spi::Data tcData;
-        // (TC0 INOPERABLE)
-        // (TC1 INOPERABLE)
+        tcData = tc0.Read();
+        if (tcData.valid) {
+            data.temperature0 = tcData.tcTemperature;
+        }
+        tcData = tc1.Read();
+        if (tcData.valid) {
+            data.temperature1 = tcData.tcTemperature;
+        }
         tcData = tc2.Read();
         if (tcData.valid) {
-            data.temperatureLox = tcData.tcTemperature;  // TC2 -> LOX Temperature
-        }
-        tcData = tc3.Read();
-        if (tcData.valid) {
-            data.temperatureLng = tcData.tcTemperature;  // TC3 -> LNG Temperature
-        }
-        tcData = tc4.Read();
-        if (tcData.valid) {
-            (void)tcData.tcTemperature;  // UNUSED
-        }
-        tcData = tc5.Read();
-        if (tcData.valid) {
-            (void)tcData.tcTemperature;  // UNUSED
+            data.temperature2;  // UNUSED
         }
 
         // USB
