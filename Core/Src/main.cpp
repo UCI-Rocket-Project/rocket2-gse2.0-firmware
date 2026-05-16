@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 using namespace std; 
 
@@ -84,11 +85,19 @@ struct GseData {
     float solenoidCurrent9  = std::nanf("");
     float solenoidCurrent10 = std::nanf("");
     float solenoidCurrent11 = std::nanf("");
-    
+
+    uint32_t temperature0;
+    uint32_t temperature1;
+    uint32_t temperature2;
 
     uint32_t crc;
 };
 #pragma pack(pop)
+
+bool newCommand = false;
+GseCommand command;
+uint8_t commandBuffer[sizeof(GseCommand)];
+GseData data;
 
 // Add extern defined handles to peripheral interfaces defined in main.c
 extern ADC_HandleTypeDef hadc1;
@@ -96,27 +105,26 @@ extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim5;
 extern UART_HandleTypeDef huart3;
-extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
+// extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 void cpp_main(void)
 {
     // incoming command
-    bool newCommand = false;
-    uint8_t commandBuffer[sizeof(GseCommand)];
-    GseCommand command;
-    GseData data;
     TcMax31855Spi::Data tcData;
 
-    // HAL_GPIO_WritePin(ETH_nRST_GPIO_Port, ETH_nRST_Pin, GPIO_PIN_SET);
-
+    HAL_GPIO_WritePin(ETH_RST_GPIO_Port, ETH_RST_Pin, GPIO_PIN_RESET);
+    HAL_Delay(10); // Hold in reset
+    HAL_GPIO_WritePin(ETH_RST_GPIO_Port, ETH_RST_Pin, GPIO_PIN_SET);
+    HAL_Delay(250); // Wait for XPort's internal 200ms reset to finish
+    
     // TC handlers
     TcMax31855Spi tc0(&hspi3, TC0_CS_GPIO_Port, TC0_CS_Pin, 100);
     TcMax31855Spi tc1(&hspi3, TC1_CS_GPIO_Port, TC1_CS_Pin, 100);
     TcMax31855Spi tc2(&hspi3, TC2_CS_GPIO_Port, TC2_CS_Pin, 100);
 
-    tc0.Init();
-    tc1.Init();
-    tc2.Init();
+    // tc0.Init();
+    // tc1.Init();
+    // tc2.Init();
 
     /* init state stuff*/
     bool solenoidState0  = 0;
@@ -143,7 +151,7 @@ void cpp_main(void)
 
     HAL_UART_Receive_IT(&huart3, commandBuffer, sizeof(GseCommand));
 
-    uint32_t usbBufferTimer = TIM5->CNT << 16 | TIM4->CNT;
+    // uint32_t usbBufferTimer = TIM5->CNT << 16 | TIM4->CNT;
 
     while (1) {
         /*** Update time ***/
@@ -229,7 +237,7 @@ void cpp_main(void)
 
         // STM32 ADC operations
         Stm32AdcData rawData = {0};
-        for (int i = 0; i < sizeof(rawData) / sizeof(rawData.s4); i++) {
+        for (int i = 0; i < 14; i++) {
             HAL_ADC_Start(&hadc1);
             HAL_ADC_PollForConversion(&hadc1, 10);
             uint32_t data = HAL_ADC_GetValue(&hadc1);
@@ -263,7 +271,7 @@ void cpp_main(void)
         }
         tcData = tc2.Read();
         if (tcData.valid) {
-            data.temperature2;  // UNUSED
+            data.temperature2 = tcData.tcTemperature;
         }
 
         // USB
@@ -311,4 +319,16 @@ void cpp_main(void)
         while ((TIM5->CNT << 16 | TIM4->CNT) - timestamp < 100) {
         }
     }
+}
+
+// function is defined as a __weak function inside the HAL driver files
+// overwritten version for our use acase
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    uint32_t crc = Crc32(commandBuffer, sizeof(GseCommand) - 4);
+    if (crc == ((GseCommand *)commandBuffer)->crc) {
+        memcpy((uint8_t *)&command, commandBuffer, sizeof(GseCommand));
+        newCommand = true;
+    }
+    HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
 }
