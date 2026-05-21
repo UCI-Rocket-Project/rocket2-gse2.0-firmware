@@ -2,7 +2,9 @@
 #include "main.h" // Access to HAL handles (huart1, etc.)
 
 #include "crc.h"
+#include "stm32f1xx_hal_i2c.h"
 #include "tc_max31855_spi.h"
+#include "adc_max11614_i2c.h"
 
 #include <cmath>
 #include <cstdint>
@@ -31,6 +33,7 @@ struct Stm32AdcData {
 };
 
 struct GseCommand {
+    uint32_t magicHeader = 0xDEADD00D;
     bool igniter0Fire;
     bool igniter1Fire;
     bool alarm;
@@ -50,6 +53,8 @@ struct GseCommand {
 };
 
 struct GseData {
+    uint32_t magicHeader = 0xDEADBEEF; // definition to discern that this is the start of the GSE data packet
+
     uint32_t timestamp;
     bool igniterArmed;
     bool igniter0Continuity;
@@ -105,26 +110,32 @@ extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim5;
 extern UART_HandleTypeDef huart3;
+extern I2C_HandleTypeDef hi2c1;
 // extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 
 void cpp_main(void)
 {
-    // incoming command
-    TcMax31855Spi::Data tcData;
+    
 
     HAL_GPIO_WritePin(ETH_RST_GPIO_Port, ETH_RST_Pin, GPIO_PIN_RESET);
     HAL_Delay(10); // Hold in reset
     HAL_GPIO_WritePin(ETH_RST_GPIO_Port, ETH_RST_Pin, GPIO_PIN_SET);
     HAL_Delay(250); // Wait for XPort's internal 200ms reset to finish
-    
-    // TC handlers
+
+    // Thermocpuple setup
+    TcMax31855Spi::Data tcData;
+
     TcMax31855Spi tc0(&hspi3, TC0_CS_GPIO_Port, TC0_CS_Pin, 100);
     TcMax31855Spi tc1(&hspi3, TC1_CS_GPIO_Port, TC1_CS_Pin, 100);
     TcMax31855Spi tc2(&hspi3, TC2_CS_GPIO_Port, TC2_CS_Pin, 100);
 
-    // tc0.Init();
-    // tc1.Init();
-    // tc2.Init();
+    tc0.Init();
+    tc1.Init();
+    tc2.Init();
+
+    // External ADC setup
+    AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
+    external_adc.Init();
 
     /* init state stuff*/
     bool solenoidState0  = 0;

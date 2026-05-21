@@ -10,6 +10,8 @@ extern "C" { // Disables C++ name mangling so C code can link to this
 // Bridge from C startup code into your C++ application
 void cpp_main(void);
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+
 #ifdef __cplusplus
 } // Closes extern "C" block
 #endif

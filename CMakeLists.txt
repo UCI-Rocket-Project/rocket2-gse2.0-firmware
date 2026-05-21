@@ -43,12 +43,14 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 file(GLOB_RECURSE ALL_DRIVER_SOURCES 
-    "RocketDrivers/tc_max31855_spi/*.cc"
+    "RocketDrivers/*.cc"
+    "RocketDrivers/*.cpp"
+    "RocketDrivers/*.c"
 )
 
 # B. Recursively find all directories that contain .h files
 # (This allows you to include "header.h" directly, even if it's deep in a folder)
-file(GLOB_RECURSE ALL_DRIVER_HEADERS "RocketDrivers/tc_max31855_spi/*.h")
+file(GLOB_RECURSE ALL_DRIVER_HEADERS "RocketDrivers/*.h")
 set(ALL_DRIVER_INC_DIRS "")
 foreach(_headerFile ${ALL_DRIVER_HEADERS})
     get_filename_component(_dir ${_headerFile} DIRECTORY)
