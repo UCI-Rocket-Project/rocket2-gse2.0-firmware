@@ -39,7 +39,7 @@ extern "C" {
 
 /* USER CODE END ET */
 
-/* Exported constants --------------------------------------------------------*/
+/* cppExported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
 
 /* USER CODE END EC */
@@ -57,6 +57,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define MVAS_TIMER htim6
+#define MVAS_TIMER_1MS_PSC 7999
 #define SOLENOID2_EN_Pin GPIO_PIN_13
 #define SOLENOID2_EN_GPIO_Port GPIOC
 #define SOLENOID1_EN_Pin GPIO_PIN_14

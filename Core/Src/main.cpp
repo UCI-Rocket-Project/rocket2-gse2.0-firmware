@@ -4,13 +4,16 @@
 #include "crc.h"
 #include "stm32f1xx_hal_i2c.h"
 #include "tc_max31855_spi.h"
-#include "adc_max11614_i2c.h"
+//#include "adc_max11614_i2c.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 
 using namespace std; 
+
+static constexpr float MVAS_SIMULTANEOUS_OPEN_THRESHOLD_S = 0.001f;
+static constexpr uint32_t MVAS_TIMER_MAX_DELAY_MS = 65535;
 
 // Define transmittable datastructures
 #pragma pack(push, 1)
@@ -47,8 +50,8 @@ struct GseCommand {
     bool solenoidState7;
     bool solenoidState8;
     bool solenoidState9;
-    bool solenoidState10;
-    bool solenoidState11;
+    bool solenoidStateMvasOpen; // States for 10 & 11
+    float solenoidOffsetMvasOpen;
     uint32_t crc;
 };
 
@@ -73,6 +76,7 @@ struct GseData {
     bool solenoidInternalState7;
     bool solenoidInternalState8;
     bool solenoidInternalState9;
+    bool solenoidInternalStateMvasOpen;
     bool solenoidInternalState10;
     bool solenoidInternalState11;
 
@@ -104,14 +108,27 @@ GseCommand command;
 uint8_t commandBuffer[sizeof(GseCommand)];
 GseData data;
 
+volatile bool solenoidState10 = false;
+volatile bool solenoidState11 = false;
+volatile bool *solenoidStateForLateTrigger = nullptr;
+
 // Add extern defined handles to peripheral interfaces defined in main.c
 extern ADC_HandleTypeDef hadc1;
 extern SPI_HandleTypeDef hspi3;
 extern TIM_HandleTypeDef htim4;
 extern TIM_HandleTypeDef htim5;
+extern TIM_HandleTypeDef htim6;
 extern UART_HandleTypeDef huart3;
 extern I2C_HandleTypeDef hi2c1;
 // extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
+
+static uint32_t MvasOffsetToDelayMs(float offsetSeconds) {
+    float delayMs = std::fabs(offsetSeconds) * 1000.0f;
+    if (delayMs > (float)MVAS_TIMER_MAX_DELAY_MS) {
+        return MVAS_TIMER_MAX_DELAY_MS;
+    }
+    return (uint32_t)(delayMs + 0.5f);
+}
 
 void cpp_main(void)
 {
@@ -123,19 +140,19 @@ void cpp_main(void)
     HAL_Delay(250); // Wait for XPort's internal 200ms reset to finish
 
     // Thermocpuple setup
-    TcMax31855Spi::Data tcData;
+    // TcMax31855Spi::Data tcData;
 
     TcMax31855Spi tc0(&hspi3, TC0_CS_GPIO_Port, TC0_CS_Pin, 100);
     TcMax31855Spi tc1(&hspi3, TC1_CS_GPIO_Port, TC1_CS_Pin, 100);
     TcMax31855Spi tc2(&hspi3, TC2_CS_GPIO_Port, TC2_CS_Pin, 100);
 
-    tc0.Init();
-    tc1.Init();
-    tc2.Init();
+//    tc0.Init();
+//    tc1.Init();
+//    tc2.Init();
 
     // External ADC setup
-    AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
-    external_adc.Init();
+    // AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
+    // external_adc.Init();
 
     /* init state stuff*/
     bool solenoidState0  = 0;
@@ -148,8 +165,9 @@ void cpp_main(void)
     bool solenoidState7  = 0;
     bool solenoidState8  = 0;
     bool solenoidState9  = 0;
-    bool solenoidState10 = 0;
-    bool solenoidState11 = 0;
+    bool solenoidStateMvasOpenCmd = 0;
+
+    float mvasOffset = 0.0f;
 
     bool igniterState0 = 0;
     bool igniterState1 = 0;
@@ -187,8 +205,40 @@ void cpp_main(void)
             solenoidState7      = command.solenoidState7;
             solenoidState8      = command.solenoidState8;
             solenoidState9      = command.solenoidState9;
-            solenoidState10     = command.solenoidState10;
-            solenoidState11     = command.solenoidState11;
+
+            mvasOffset = command.solenoidOffsetMvasOpen;
+
+            bool commandMvasOpen = command.solenoidStateMvasOpen;
+            if (std::fabs(mvasOffset) < MVAS_SIMULTANEOUS_OPEN_THRESHOLD_S) {
+                // Within 1 ms offset, we don't have this granularity
+                solenoidState10 = commandMvasOpen; 
+                solenoidState11 = commandMvasOpen;
+            } else {
+                if (commandMvasOpen && !solenoidStateMvasOpenCmd) {
+                    // Rising edge
+                    // + means 10 first then 11
+                    if (mvasOffset > 0) {
+                        solenoidState10 = true;
+                        solenoidStateForLateTrigger = &solenoidState11;
+                    } else {
+                        solenoidStateForLateTrigger = &solenoidState10;
+                        solenoidState11 = true;
+                    }
+
+                    uint32_t delayMs = MvasOffsetToDelayMs(mvasOffset);
+                    __HAL_TIM_SET_AUTORELOAD(&htim6, delayMs);
+                    
+                    __HAL_TIM_SET_COUNTER(&htim6, 0);
+                    
+                    HAL_TIM_Base_Start_IT(&htim6);
+                } else if (!commandMvasOpen) {
+                    solenoidState10 = false;
+                    solenoidState11 = false;
+                } 
+            }
+
+            solenoidStateMvasOpenCmd = commandMvasOpen;
+
         }
 
         // update internal states feedback
@@ -205,6 +255,7 @@ void cpp_main(void)
         data.solenoidInternalState7     = solenoidState7;
         data.solenoidInternalState8     = solenoidState8;
         data.solenoidInternalState9     = solenoidState9;
+        data.solenoidInternalStateMvasOpen = solenoidStateMvasOpenCmd;
         data.solenoidInternalState10    = solenoidState10;
         data.solenoidInternalState11    = solenoidState11;
 
@@ -272,18 +323,18 @@ void cpp_main(void)
         data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
         
         // read thermocouples
-        tcData = tc0.Read();
-        if (tcData.valid) {
-            data.temperature0 = tcData.tcTemperature;
-        }
-        tcData = tc1.Read();
-        if (tcData.valid) {
-            data.temperature1 = tcData.tcTemperature;
-        }
-        tcData = tc2.Read();
-        if (tcData.valid) {
-            data.temperature2 = tcData.tcTemperature;
-        }
+        // tcData = tc0.Read();
+        // if (tcData.valid) {
+        //     data.temperature0 = tcData.tcTemperature;
+        // }
+        // tcData = tc1.Read();
+        // if (tcData.valid) {
+        //     data.temperature1 = tcData.tcTemperature;
+        // }
+        // tcData = tc2.Read();
+        // if (tcData.valid) {
+        //     data.temperature2 = tcData.tcTemperature;
+        // }
 
         // USB
         /*
@@ -334,12 +385,25 @@ void cpp_main(void)
 
 // function is defined as a __weak function inside the HAL driver files
 // overwritten version for our use acase
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     uint32_t crc = Crc32(commandBuffer, sizeof(GseCommand) - 4);
     if (crc == ((GseCommand *)commandBuffer)->crc) {
         memcpy((uint8_t *)&command, commandBuffer, sizeof(GseCommand));
         newCommand = true;
     }
     HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+
+    // TIM6 is on APB1 which is 8 MHz for now
+    // PSC is 7999 (8000) so 1 kHz resolution
+    // Set ARR to # of ms to trigger
+
+    if (htim->Instance == TIM6 && solenoidStateForLateTrigger != nullptr) {
+        *solenoidStateForLateTrigger = true;
+        solenoidStateForLateTrigger = nullptr;
+    }
+
+
 }

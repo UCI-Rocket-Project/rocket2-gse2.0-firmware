@@ -61,14 +61,17 @@ list(REMOVE_DUPLICATES ALL_DRIVER_INC_DIRS)
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
-    ${ALL_DRIVER_SOURCES}
+#    ${ALL_DRIVER_SOURCES}
+    "RocketDrivers/tc_max31855_spi/tc_max31855_spi.cc"
     Core/Src/main.cpp
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
-    ${ALL_DRIVER_INC_DIRS}
+#    ${ALL_DRIVER_INC_DIRS}
+
+    "RocketDrivers/tc_max31855_spi"
 )
 
 # Add project symbols (macros)

@@ -12,6 +12,8 @@ void cpp_main(void);
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
+
 #ifdef __cplusplus
 } // Closes extern "C" block
 #endif
