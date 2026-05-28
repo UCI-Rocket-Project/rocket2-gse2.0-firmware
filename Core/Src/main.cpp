@@ -129,9 +129,9 @@ void cpp_main(void)
     TcMax31855Spi tc1(&hspi3, TC1_CS_GPIO_Port, TC1_CS_Pin, 100);
     TcMax31855Spi tc2(&hspi3, TC2_CS_GPIO_Port, TC2_CS_Pin, 100);
 
-    tc0.Init();
-    tc1.Init();
-    tc2.Init();
+    // tc0.Init();
+    // tc1.Init();
+    // tc2.Init();
 
     // External ADC setup
     AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
@@ -272,18 +272,18 @@ void cpp_main(void)
         data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
         
         // read thermocouples
-        tcData = tc0.Read();
-        if (tcData.valid) {
-            data.temperature0 = tcData.tcTemperature;
-        }
-        tcData = tc1.Read();
-        if (tcData.valid) {
-            data.temperature1 = tcData.tcTemperature;
-        }
-        tcData = tc2.Read();
-        if (tcData.valid) {
-            data.temperature2 = tcData.tcTemperature;
-        }
+        // tcData = tc0.Read();
+        // if (tcData.valid) {
+        //     data.temperature0 = tcData.tcTemperature;
+        // }
+        // tcData = tc1.Read();
+        // if (tcData.valid) {
+        //     data.temperature1 = tcData.tcTemperature;
+        // }
+        // tcData = tc2.Read();
+        // if (tcData.valid) {
+        //     data.temperature2 = tcData.tcTemperature;
+        // }
 
         // USB
         /*
