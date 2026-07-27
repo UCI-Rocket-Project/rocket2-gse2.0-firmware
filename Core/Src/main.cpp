@@ -49,6 +49,7 @@ struct GseCommand {
     bool solenoidState9;
     bool solenoidState10;
     bool solenoidState11;
+    uint16_t externalADCChannelSelect; // bitmask to select analog input channels 0-7 on external ADC
     uint32_t crc;
 };
 
@@ -95,6 +96,18 @@ struct GseData {
     uint32_t temperature1;
     uint32_t temperature2;
 
+    uint16_t externalADCChannelSelect;
+
+    // external ADC data
+    float pressure0  = std::nanf("");
+    float pressure1  = std::nanf("");
+    float pressure2  = std::nanf("");
+    float pressure3  = std::nanf("");
+    float loadCellForce2  = std::nanf("");
+    float loadCellForce3  = std::nanf("");
+    float loadCellForce4  = std::nanf("");
+    float loadCellForce5  = std::nanf("");
+
     uint32_t crc;
 };
 #pragma pack(pop)
@@ -134,8 +147,9 @@ void cpp_main(void)
     // tc2.Init();
 
     // External ADC setup
-    AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
-    external_adc.Init();
+    AdcMax11614i2c::Data externalADCData;
+    AdcMax11614i2c externalADC(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin, EXT_ADC_SDA_GPIO_Port, EXT_ADC_SDA_Pin);
+    externalADC.Init();
 
     /* init state stuff*/
     bool solenoidState0  = 0;
@@ -151,11 +165,12 @@ void cpp_main(void)
     bool solenoidState10 = 0;
     bool solenoidState11 = 0;
 
+    uint16_t externalADCChannelSelect = 0; // Bitmask to select analog input channels 0-7 on external ADC
+
     bool igniterState0 = 0;
     bool igniterState1 = 0;
 
     bool alarmState = 0;
-
 
     HAL_TIM_Base_Start(&htim4);
     HAL_TIM_Base_Start(&htim5);
@@ -174,21 +189,22 @@ void cpp_main(void)
         if (newCommand) {
             newCommand = false;
 
-            igniterState0       = command.igniter0Fire;
-            igniterState1       = command.igniter1Fire;
-            alarmState          = command.alarm;
-            solenoidState0      = command.solenoidState0;
-            solenoidState1      = command.solenoidState1;
-            solenoidState2      = command.solenoidState2;
-            solenoidState3      = command.solenoidState3;
-            solenoidState4      = command.solenoidState4;
-            solenoidState5      = command.solenoidState5;
-            solenoidState6      = command.solenoidState6;
-            solenoidState7      = command.solenoidState7;
-            solenoidState8      = command.solenoidState8;
-            solenoidState9      = command.solenoidState9;
-            solenoidState10     = command.solenoidState10;
-            solenoidState11     = command.solenoidState11;
+            igniterState0               = command.igniter0Fire;
+            igniterState1               = command.igniter1Fire;
+            alarmState                  = command.alarm;
+            solenoidState0              = command.solenoidState0;
+            solenoidState1              = command.solenoidState1;
+            solenoidState2              = command.solenoidState2;
+            solenoidState3              = command.solenoidState3;
+            solenoidState4              = command.solenoidState4;
+            solenoidState5              = command.solenoidState5;
+            solenoidState6              = command.solenoidState6;
+            solenoidState7              = command.solenoidState7;
+            solenoidState8              = command.solenoidState8;
+            solenoidState9              = command.solenoidState9;
+            solenoidState10             = command.solenoidState10;
+            solenoidState11             = command.solenoidState11;
+            externalADCChannelSelect    = command.externalADCChannelSelect;
         }
 
         // update internal states feedback
@@ -207,6 +223,7 @@ void cpp_main(void)
         data.solenoidInternalState9     = solenoidState9;
         data.solenoidInternalState10    = solenoidState10;
         data.solenoidInternalState11    = solenoidState11;
+        data.externalADCChannelSelect   = externalADCChannelSelect;
 
         // switch solenoids
         HAL_GPIO_WritePin(SOLENOID0_EN_GPIO_Port,   SOLENOID0_EN_Pin,   (GPIO_PinState)solenoidState0);
@@ -284,6 +301,38 @@ void cpp_main(void)
         // if (tcData.valid) {
         //     data.temperature2 = tcData.tcTemperature;
         // }
+
+        // read external ADC
+        externalADCData = externalADC.Read(externalADCChannelSelect);
+        // for each channel, if we got data, convert from 0-4096 voltage to force/pressure
+        // since max output of both pt and load cell is 5V and reference voltage of adc is 5V,
+        // we can convert directly
+        // pts
+        if (externalADCData.channelOutput0 != -1) {
+            data.pressure0 = (externalADCData.channelOutput0 / externalADC.maxOutput) / STM_PT_MAX_PSI;
+        }
+        if (externalADCData.channelOutput1 != -1) {
+            data.pressure1 = (externalADCData.channelOutput1 / externalADC.maxOutput) / STM_PT_MAX_PSI;
+        }
+        if (externalADCData.channelOutput2 != -1) {
+            data.pressure2 = (externalADCData.channelOutput2 / externalADC.maxOutput) / STM_PT_MAX_PSI;
+        }
+        if (externalADCData.channelOutput3 != -1) {
+            data.pressure3 = (externalADCData.channelOutput3 / externalADC.maxOutput) / STM_PT_MAX_PSI;
+        }
+        // load cells
+        if (externalADCData.channelOutput4 != -1) {
+            data.loadCellForce2 = (externalADCData.channelOutput4 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
+        }
+        if (externalADCData.channelOutput5 != -1) {
+            data.loadCellForce3 = (externalADCData.channelOutput5 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
+        }
+        if (externalADCData.channelOutput6 != -1) {
+            data.loadCellForce4 = (externalADCData.channelOutput6 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
+        }
+        if (externalADCData.channelOutput7 != -1) {
+            data.loadCellForce5 = (externalADCData.channelOutput7 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
+        }
 
         // USB
         /*
