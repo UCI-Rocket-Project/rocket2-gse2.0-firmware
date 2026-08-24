@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 using namespace std; 
 
@@ -147,9 +148,10 @@ void cpp_main(void)
     // tc2.Init();
 
     // External ADC setup
-    AdcMax11614i2c::Data externalADCData;
+    std::optional<AdcMax11614i2c::Data> externalADCData;
     AdcMax11614i2c externalADC(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin, EXT_ADC_SDA_GPIO_Port, EXT_ADC_SDA_Pin);
-    externalADC.Init();
+    AdcMax11614i2c::Config externalADCConfig;
+    externalADC.Init(externalADCConfig);
 
     /* init state stuff*/
     bool solenoidState0  = 0;
@@ -263,6 +265,9 @@ void cpp_main(void)
         /*** Read sensors ***/
         // All sensing pins are preconfigured to always send data, no matter if it's actually used during a test/launch
 
+        // begin async read of external ADC, since it might finish in this same loop
+        externalADC.StartReadAsync(externalADCChannelSelect);
+
         // STM32 ADC operations
         Stm32AdcData rawData = {0};
         for (int i = 0; i < 14; i++) {
@@ -302,36 +307,38 @@ void cpp_main(void)
         //     data.temperature2 = tcData.tcTemperature;
         // }
 
-        // read external ADC
-        externalADCData = externalADC.Read(externalADCChannelSelect);
-        // for each channel, if we got data, convert from 0-4096 voltage to force/pressure
-        // since max output of both pt and load cell is 5V and reference voltage of adc is 5V,
-        // we can convert directly
-        // pts
-        if (externalADCData.channelOutput0 != -1) {
-            data.pressure0 = (externalADCData.channelOutput0 / externalADC.maxOutput) / STM_PT_MAX_PSI;
-        }
-        if (externalADCData.channelOutput1 != -1) {
-            data.pressure1 = (externalADCData.channelOutput1 / externalADC.maxOutput) / STM_PT_MAX_PSI;
-        }
-        if (externalADCData.channelOutput2 != -1) {
-            data.pressure2 = (externalADCData.channelOutput2 / externalADC.maxOutput) / STM_PT_MAX_PSI;
-        }
-        if (externalADCData.channelOutput3 != -1) {
-            data.pressure3 = (externalADCData.channelOutput3 / externalADC.maxOutput) / STM_PT_MAX_PSI;
-        }
-        // load cells
-        if (externalADCData.channelOutput4 != -1) {
-            data.loadCellForce2 = (externalADCData.channelOutput4 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
-        }
-        if (externalADCData.channelOutput5 != -1) {
-            data.loadCellForce3 = (externalADCData.channelOutput5 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
-        }
-        if (externalADCData.channelOutput6 != -1) {
-            data.loadCellForce4 = (externalADCData.channelOutput6 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
-        }
-        if (externalADCData.channelOutput7 != -1) {
-            data.loadCellForce5 = (externalADCData.channelOutput7 / externalADC.maxOutput) / LOAD_CELL_MAX_FORCE;
+        // read external ADC if interrupt finished
+        if (externalADC.IsDataReady()) {
+            externalADCData = externalADC.FetchData(); // calling this resets driver to IDLE state
+            // for overall data structure, only use if we got a successful read
+            if (externalADCData.has_value()) {
+                // for each channel, if we got data, convert from 0-4095 raw output to 0-5V digital voltage
+                if (externalADCData.channelOutput0 != -1) {
+                    data.pressure0 = (externalADCData.channelOutput0 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                if (externalADCData.channelOutput1 != -1) {
+                    data.pressure1 = (externalADCData.channelOutput1 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                if (externalADCData.channelOutput2 != -1) {
+                    data.pressure2 = (externalADCData.channelOutput2 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                if (externalADCData.channelOutput3 != -1) {
+                    data.pressure3 = (externalADCData.channelOutput3 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                // load cells
+                if (externalADCData.channelOutput4 != -1) {
+                    data.loadCellForce2 = (externalADCData.channelOutput4 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                if (externalADCData.channelOutput5 != -1) {
+                    data.loadCellForce3 = (externalADCData.channelOutput5 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                if (externalADCData.channelOutput6 != -1) {
+                    data.loadCellForce4 = (externalADCData.channelOutput6 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+                if (externalADCData.channelOutput7 != -1) {
+                    data.loadCellForce5 = (externalADCData.channelOutput7 / (float)externalADC.maxChannelOutput) * 5.0f;
+                }
+            }
         }
 
         // USB
@@ -391,4 +398,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         newCommand = true;
     }
     HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
+}
+
+void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    AdcMax11614i2c::HAL_TxCpltCallback(hi2c);
+}
+
+void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    AdcMax11614i2c::HAL_RxCpltCallback(hi2c);
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c) {
+    AdcMax11614i2c::HAL_ErrorCallback(hi2c);
 }

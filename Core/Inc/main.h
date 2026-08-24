@@ -137,8 +137,7 @@ void Error_Handler(void);
 #define EXT_ADC_SCL_GPIO_Port GPIOB
 #define EXT_ADC_SDA_Pin GPIO_PIN_7
 #define EXT_ADC_SDA_GPIO_Port GPIOB
-#define STM_PT_MAX_PSI 5000 // TODO: get actual value
-#define LOAD_CELL_MAX_FORCE 1000 // TODO: get actual value
+#define EXT_ADC_MAX_CHANNEL_OUTPUT 4095 // 12-bit output
 #define SOLENOID4_EN_Pin GPIO_PIN_8
 #define SOLENOID4_EN_GPIO_Port GPIOB
 #define SOLENOID3_EN_Pin GPIO_PIN_9

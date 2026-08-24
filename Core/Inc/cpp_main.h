@@ -12,6 +12,12 @@ void cpp_main(void);
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 
+void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c);
+
+void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c);
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c);
+
 #ifdef __cplusplus
 } // Closes extern "C" block
 #endif
