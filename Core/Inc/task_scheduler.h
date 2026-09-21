@@ -1,169 +1,221 @@
-/**
-* @brief simple async task scheduler using a ring buffer of task IDs that the scheduler checks each loop.
-* Each task may have dependencies, an execution time interval, and a callback function. The scheduler will
-* wait until another callback/interrupt updates the dependencies as ready and the timer condition is met,
-* then push the task ID to the execution queue.
-*/
-
 #pragma once
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 #include <optional>
 
-#include "stm32f4xx_hal.h" 
+// Mock the interrupt enable/disable for testing purposes
+#ifdef __arm__
+    #include "stm32f1xx_hal.h"
+    #define SCHEDULER_CRITICAL_ENTER() uint32_t primask = __get_PRIMASK(); __disable_irq()
+    #define SCHEDULER_CRITICAL_EXIT()  __set_PRIMASK(primask)
+#else
+    #include <mutex>
+    extern std::mutex test_mutex;
+    #define SCHEDULER_CRITICAL_ENTER() test_mutex.lock()
+    #define SCHEDULER_CRITICAL_EXIT()  test_mutex.unlock()
+#endif
 
+// A task defines its callback as a generic function pointer
 typedef void (*TaskCallback)();
 
-template <size_t MaxTasks, size_t QueueSize>
+template <size_t MaxTasks, size_t MaxDepsPerTask>
 class TaskScheduler {
 public:
     struct Task {
         TaskCallback callback = nullptr;
-        uint32_t intervalMs = 0;
-        uint32_t lastScheduledTime = 0;
-        bool hasDependencies = false;
+        // Tasks schedule themselves for certain timestamps
+        uint32_t scheduledTime = 0;
         
-        // volatile flags modified by asynchronous isrs
-        volatile bool timeReady = false;
-        volatile bool depsReady = false;
+        std::array<bool, MaxDepsPerTask> dependencies = {false};
+        // The number of required dependencies to check for this task
+        // Must be <= `MaxDepsPerTask`; dependencies beyond this number are not checked
+        size_t requiredDependencies = 0; 
+        
+        // Whether the task is scheduled to execute again
         bool active = false;
+        // Index of the next task in the linked list
+        size_t next = MaxTasks; 
     };
 
-    // static pointer instance to interface with C
-    static TaskScheduler* Instance;
-
-    TaskScheduler() {
-        Instance = this;
-    }
+    TaskScheduler() {}
 
     /**
-     * @brief automatically allocates a task to the next available open slot
-     * @param cb: task callback to execute when both the timer and hardware are ready
-     * @param intervalMs: how often the timer should attempt to rechedule the task
-     * @param hasDeps: whether the task has other dependencies that the scheduler should wait for (defaults to false);
-     * the dependent task's callback is responsible for updating whether the dependencies have been met
-     * @retval std::optional containing the auto-generated id, or nullopt if array is full
+     * @brief Allocates a task to the next available open slot.
+     * @param cb The function to execute.
+     * @param requiredDeps How many dependencies this specific task needs (up to `MaxDepsPerTask`).
+     * @retval The task id, if created successfully, or std::nullopt otherwise.
      */
-    std::optional<size_t> AddTask(TaskCallback cb, uint32_t intervalMs, bool hasDeps = false) {
+    std::optional<size_t> AddTask(TaskCallback cb, size_t requiredDeps = 0) {
+        if (requiredDeps > MaxDepsPerTask) return std::nullopt;
+
         for (size_t i = 0; i < MaxTasks; i++) {
-            if (!_tasks[i].active) {
+            if (!_tasks[i].callback) {
                 _tasks[i].callback = cb;
-                _tasks[i].intervalMs = intervalMs;
-                _tasks[i].lastScheduledTime = 0; 
-                _tasks[i].hasDependencies = hasDeps;
+                _tasks[i].requiredDependencies = requiredDeps;
+                _tasks[i].active = false;
+                _tasks[i].next = MaxTasks;
                 
-                // reset internal state machine
-                _tasks[i].timeReady = false;
-                _tasks[i].depsReady = false;
-                _tasks[i].active = true;
-                
+                for (size_t d = 0; d < MaxDepsPerTask; ++d) {
+                    _tasks[i].dependencies[d] = false;
+                }
                 return i;
             }
         }
-        return std::nullopt; // array is full
+        return std::nullopt; 
     }
 
     /**
-     * @brief advances the internal timer one tick; should be called in HAL_SYSTICK_Callback()
-     * @param currentTickMs: the current hardware tick from HAL_GetTick()
+     * @brief Safely sorts a task by execution time into the execution list.
+     * @param id The id of the task to schedule
+     * @param targetTime When the task should attempt to be executed; this is the time
+     * that's used to insert the task into the list in its sorted position
      */
-    void AdvanceSysTickTimer(uint32_t currentTickMs) {
-        for (size_t i = 0; i < MaxTasks; i++) {
-            // inactive tasks aren't checked until they are marked active again
-            if (_tasks[i].active && !_tasks[i].timeReady) {
-                // unsigned subtraction handles timer rollover
-                if ((uint32_t)(currentTickMs - _tasks[i].lastScheduledTime) >= _tasks[i].intervalMs) {
-                    _tasks[i].timeReady = true;
-                    
-                    // if dependencies and timer are ready, add to task execution queue
-                    if (!_tasks[i].hasDependencies || _tasks[i].depsReady) {
-                        PushToQueue(i);
-                    }
+    void ScheduleTask(size_t id, uint32_t targetTime) {
+        if (id >= MaxTasks || !_tasks[id].callback) return;
+
+        // Disable interrupts temporarily to prevent superloop modifying task at the same time
+        SCHEDULER_CRITICAL_ENTER();
+
+        RemoveFromList(id);
+
+        _tasks[id].scheduledTime = targetTime;
+        _tasks[id].active = true;
+        _tasks[id].next = MaxTasks;
+
+        // If list is empty OR targetTime is chronologically BEFORE the head's time,
+        // move the new task to the front
+        if (_head == MaxTasks || TimeIsBefore(targetTime, _tasks[_head].scheduledTime)) {
+            _tasks[id].next = _head;
+            _head = id;
+        } else {
+            size_t curr = _head;
+            
+            // Iterate until we find a task scheduled LATER than our target time
+            while (_tasks[curr].next != MaxTasks && 
+                   !TimeIsBefore(targetTime, _tasks[_tasks[curr].next].scheduledTime)) {
+                curr = _tasks[curr].next;
+            }
+            _tasks[id].next = _tasks[curr].next;
+            _tasks[curr].next = id;
+        }
+
+        // Re-enable interrupts
+        SCHEDULER_CRITICAL_EXIT();
+    }
+
+    /**
+     * @brief Sets the state of a single task dependency.
+     * @param id The task id, assigned on creation.
+     * @param depIndex The index of the specific dependency in the task's array.
+     * @param state Whether the dependency has been met or not.
+     */
+    void SetDependency(size_t id, size_t depIndex, bool state) {
+        if (id < MaxTasks && depIndex < _tasks[id].requiredDependencies) {
+            _tasks[id].dependencies[depIndex] = state;
+        }
+    }
+
+    /**
+     * @brief Runs all ready tasks in a single cycle, evaluating timers and dependencies, 
+     * @param currentTime The time to compare the scheduled time of the tasks against.
+     */
+    void Run(uint32_t currentTime) {
+        size_t curr = _head;
+        size_t prev = MaxTasks;
+
+        // Iterates over the sorted linked list of tasks until finding the first task
+        // whose time hasn't passed yet
+        // Executes all tasks for which the time and dependency requirements have been met
+        while (curr != MaxTasks) {
+            Task& t = _tasks[curr];
+
+            // Bail out instantly if the current time has not reached the scheduled time
+            // This prevents us from checking any future tasks after this one
+            if (!TimeIsReady(currentTime, t.scheduledTime)) {
+                break;
+            }
+
+            // Only check the active dependencies for this specific task
+            bool depsMet = true;
+            for (size_t i = 0; i < t.requiredDependencies; ++i) {
+                if (!t.dependencies[i]) {
+                    depsMet = false;
+                    break;
                 }
             }
-        }
-    }
 
-    /**
-     * @brief marks dependencies as ready for the specified task; should be called from hardware interrupts
-     * when depencency tasks finish
-     * @param id: the id of the task to mark as ready
-     */
-    void SetDependenciesFulfilled(size_t id) {
-        if (id < MaxTasks && _tasks[id].active) {
-            _tasks[id].depsReady = true;
-            
-            // if the timer already popped, queue it immediately
-            if (_tasks[id].timeReady) {
-                PushToQueue(id);
-            }
-        }
-    }
+            if (depsMet) {
+                // Disable interrupts temporarily to prevent superloop modifying task at the same time
+                SCHEDULER_CRITICAL_ENTER();
+                size_t nextNode = t.next;
+                
+                // Remove task from the linked list
+                if (prev == MaxTasks) {
+                    _head = nextNode;
+                } else {
+                    _tasks[prev].next = nextNode;
+                }
 
-    /**
-     * @brief main execution step that reads from ring buffer of ready tasks; should be called in a
-     * superloop in the calling task
-     */
-    void Run() {
-        size_t taskId;
-        
-        if (PopFromQueue(taskId)) {
-            Task& t = _tasks[taskId];
-            
-            if (t.callback) {
+                // Re-enable interrupts
+                SCHEDULER_CRITICAL_EXIT();
+
+                // Clear state to prevent race conditions during self-rescheduling
+                t.active = false;
+                t.next = MaxTasks;
+                for (size_t i = 0; i < t.requiredDependencies; ++i) {
+                    t.dependencies[i] = false;
+                }
+
+                // Execute the task
                 t.callback();
-            }
 
-            // reset state machine for the next cycle
-            t.timeReady = false;
-            t.depsReady = false;
-            
-            // prevent timer drift by marking actual scheduled time instead of when it was supposed to run
-            t.lastScheduledTime += t.intervalMs; 
+                // If the task was executed, we don't update prev since that task is not active now
+                curr = nextNode;
+            } else {
+                // Time is met but dependencies aren't; keep iterating
+                prev = curr;
+                curr = t.next;
+            }
         }
     }
 
 private:
-    Task _tasks[MaxTasks];
-    
-    volatile size_t _head = 0;
-    volatile size_t _tail = 0;
-    volatile size_t _queue[QueueSize];
+    std::array<Task, MaxTasks> _tasks;
+    volatile size_t _head = MaxTasks;
 
     /**
-     * @brief adds a ready task to the task execution queue
-     * @param id: the id of the task to queue
+     * @brief Compares two timestamps, handling hardware timer rollovers.
+     * Evaluates true if t1 is chronologically before t2.
      */
-    void PushToQueue(size_t id) {
-        // uses a ring buffer with modulo arithmetic to prevent blocking or allocating new arrays
-        size_t nextHead = (_head + 1) % QueueSize;
-        // if the queue is full, the task will be skipped here and queued in the next 
-        if (nextHead != _tail) { 
-            _queue[_head] = id;
-            // data memory barrier ensures data is saved before head changes
-            __DMB();             
-            _head = nextHead;
+    static inline bool TimeIsBefore(uint32_t t1, uint32_t t2) {
+        return (int32_t)(t1 - t2) < 0;
+    }
+
+    /**
+     * @brief Evaluates true if the current time has reached or passed the scheduled time.
+     */
+    static inline bool TimeIsReady(uint32_t current, uint32_t scheduled) {
+        return (int32_t)(current - scheduled) >= 0;
+    }
+
+    /**
+     * @brief Helper function to remove a task from the linked list of scheduled tasks.
+     */
+    void RemoveFromList(size_t id) {
+        if (_head == MaxTasks) return;
+        if (_head == id) {
+            _head = _tasks[id].next;
+            return;
+        }
+        size_t curr = _head;
+        while (_tasks[curr].next != MaxTasks) {
+            if (_tasks[curr].next == id) {
+                _tasks[curr].next = _tasks[id].next;
+                return;
+            }
+            curr = _tasks[curr].next;
         }
     }
-
-    /**
-     * @brief removes a completed task from the execution queue
-     * @param id: the id of the task to remove from the queue
-     * @retval bool indicating whether there was a task in the queue to execute; false means
-     * the queue is empty.
-     */
-    bool PopFromQueue(size_t& id) {
-        if (_head == _tail) return false; 
-        
-        id = _queue[_tail];
-        // data memory barrier ensures data is read before tail changes
-        __DMB();                 
-        _tail = (_tail + 1) % QueueSize;
-        
-        return true;
-    }
 };
-
-template <size_t MaxTasks, size_t QueueSize>
-TaskScheduler<MaxTasks, QueueSize>* TaskScheduler<MaxTasks, QueueSize>::Instance = nullptr;
