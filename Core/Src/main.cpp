@@ -134,8 +134,10 @@ void cpp_main(void)
     // tc2.Init();
 
     // External ADC setup
-    AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
-    external_adc.Init();
+    AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin, EXT_ADC_SDA_GPIO_Port, EXT_ADC_SDA_Pin);
+    AdcMax11614i2c::Config adcConfig;
+    // Any overrides for default struct values should go here here (e.g., adcConfig.maxAttempts = 5;)
+    external_adc.Init(adcConfig);
 
     /* init state stuff*/
     bool solenoidState0  = 0;
