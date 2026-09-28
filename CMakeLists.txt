@@ -25,64 +25,71 @@ set(CMAKE_PROJECT_NAME rocket2-gse2.0-firmware)
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Core project settings
-project(${CMAKE_PROJECT_NAME})
+project(${CMAKE_PROJECT_NAME} C CXX)
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
-# Enable CMake support for ASM and C languages
-enable_language(C ASM CXX)
+# Toolchain split: STM32 HAL compiles firmware main, while native compiles tests
+if(CMAKE_C_COMPILER MATCHES "arm-none-eabi")
+    message(STATUS "Cross-compiler detected: Building STM32 Firmware")
+    
+    # Enable ASM exclusively for the STM32 build environment
+    enable_language(ASM)
+    
+    # Create an executable object type
+    add_executable(${CMAKE_PROJECT_NAME})
 
-# Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME})
+    # Add STM32CubeMX generated sources
+    add_subdirectory(cmake/stm32cubemx)
 
-# Add STM32CubeMX generated sources
-add_subdirectory(cmake/stm32cubemx)
+    # Link directories setup
+    target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE)
 
-# Link directories setup
-target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined library search paths
-)
+    file(GLOB_RECURSE ALL_DRIVER_SOURCES 
+        "RocketDrivers/*.cc"
+        "RocketDrivers/*.cpp"
+        "RocketDrivers/*.c"
+    )
 
-file(GLOB_RECURSE ALL_DRIVER_SOURCES 
-    "RocketDrivers/*.cc"
-    "RocketDrivers/*.cpp"
-    "RocketDrivers/*.c"
-)
+    # Recursively find all directories that contain .h files
+    file(GLOB_RECURSE ALL_DRIVER_HEADERS "RocketDrivers/*.h")
+    set(ALL_DRIVER_INC_DIRS "")
+    foreach(_headerFile ${ALL_DRIVER_HEADERS})
+        get_filename_component(_dir ${_headerFile} DIRECTORY)
+        list(APPEND ALL_DRIVER_INC_DIRS ${_dir})
+    endforeach()
+    list(REMOVE_DUPLICATES ALL_DRIVER_INC_DIRS)
 
-# B. Recursively find all directories that contain .h files
-# (This allows you to include "header.h" directly, even if it's deep in a folder)
-file(GLOB_RECURSE ALL_DRIVER_HEADERS "RocketDrivers/*.h")
-set(ALL_DRIVER_INC_DIRS "")
-foreach(_headerFile ${ALL_DRIVER_HEADERS})
-    get_filename_component(_dir ${_headerFile} DIRECTORY)
-    list(APPEND ALL_DRIVER_INC_DIRS ${_dir})
-endforeach()
-list(REMOVE_DUPLICATES ALL_DRIVER_INC_DIRS)
+    # Add sources to executable
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${ALL_DRIVER_SOURCES}
+        Core/Src/main.cpp
+        Core/Src/gse_controller.cpp
+    )
 
-# Add sources to executable
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
-    ${ALL_DRIVER_SOURCES}
-    Core/Src/main.cpp
-)
+    # Add include paths
+    target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+        ${ALL_DRIVER_INC_DIRS}
+    )
 
-# Add include paths
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined include paths
-    ${ALL_DRIVER_INC_DIRS}
-)
+    # Add project symbols (macros)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+        STM32F1
+    )
 
-# Add project symbols (macros)
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
-    STM32F1
-)
+    # Remove wrong libob.a library dependency when using cpp files
+    list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
-# Remove wrong libob.a library dependency when using cpp files
-list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
+    # Add linked libraries
+    target_link_libraries(${CMAKE_PROJECT_NAME}
+        stm32cubemx
+    )
 
-# Add linked libraries
-target_link_libraries(${CMAKE_PROJECT_NAME}
-    stm32cubemx
-
-    # Add user defined libraries
-)
+else()
+    message(STATUS "Native compiler detected: configuring unit Ttsts")
+    
+    # Enable CTest integration for the VS Code UI
+    include(CTest)
+    
+    # Route CMake directly to the tests folder
+    add_subdirectory(tests)
+endif()

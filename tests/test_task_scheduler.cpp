@@ -7,7 +7,7 @@
 // Define the simulated critical section mutex for the PC build
 std::mutex test_mutex;
 
-// --- Global State ---
+// --- Global state ---
 
 bool taskARan = false;
 bool taskBRan = false;

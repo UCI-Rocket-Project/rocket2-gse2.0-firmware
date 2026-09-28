@@ -5,13 +5,13 @@
             "name": "default",
             "hidden": true,
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/${presetName}",
-		    "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
-            "cacheVariables": {
-            }
+            "binaryDir": "{sourceDir}/build/{presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {}
         },
         {
             "name": "Debug",
+            "displayName": "Firmware (Debug)",
             "inherits": "default",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug"
@@ -19,9 +19,20 @@
         },
         {
             "name": "Release",
+            "displayName": "Firmware (Release)",
             "inherits": "default",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "TestNative",
+            "displayName": "Unit Tests (Native Host)",
+            "description": "Builds and runs unit tests using the host OS compiler",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/TestNative",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
             }
         }
     ],
@@ -33,6 +44,23 @@
         {
             "name": "Release",
             "configurePreset": "Release"
+        },
+        {
+            "name": "TestNative",
+            "configurePreset": "TestNative"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "TestNative",
+            "configurePreset": "TestNative",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "noTestsAction": "error",
+                "stopOnFailure": false
+            }
         }
     ]
 }

@@ -1,12 +1,8 @@
-# Defined as a separate CMake project so CMake doesn't try to build the tests
-# using an STM32 toolchain
-cmake_minimum_required(VERSION 3.14)
 project(RocketFirmwareTests CXX)
 
-# Enable std::optional support and other C++ 17 features
+# Enable std::optional support and C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Fetch Google Test automatically
 include(FetchContent)
@@ -17,11 +13,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-# Define the test executable using the source file in this directory
+# Define the test executable
 add_executable(scheduler_tests test_task_scheduler.cpp)
 
 # Link Google Test to executable
 target_link_libraries(scheduler_tests PRIVATE gtest_main gtest pthread)
+
+# Map the root directory so the test can find your core headers (e.g., task_scheduler.h)
+target_include_directories(scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR})
 
 # Register tests with CTest
 include(GoogleTest)
