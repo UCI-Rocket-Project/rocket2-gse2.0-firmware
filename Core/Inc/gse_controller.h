@@ -44,6 +44,7 @@ class GseController {
     TaskScheduler<10, 3> scheduler;
     size_t cmdTaskId, solenoidTaskId, igniterTaskId, alarmTaskId;
     size_t internalAdcTaskId, initExtAdcTaskId, tcTaskId, fetchExtAdcTaskId, ethTaskId;
+    size_t testTaskId;
 
     // Task callbacks
     static void ProcessCommandsTask();
@@ -55,4 +56,5 @@ class GseController {
     static void ReadThermocouplesTask();
     static void FetchExternalAdcTask();
     static void TransmitEthernetTask();
+    static void TestCounterTask();
 };

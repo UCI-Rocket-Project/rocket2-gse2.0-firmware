@@ -1,5 +1,6 @@
 #include "gse_controller.h"
 #include "crc.h"
+#include <cstddef>
 
 // Define external HAL handles
 extern ADC_HandleTypeDef hadc1;
@@ -11,6 +12,15 @@ extern I2C_HandleTypeDef hi2c1;
 
 // Allocate memory for the static pointer
 GseController* GseController::instance = nullptr;
+size_t counter;
+float timestamp;
+float hz;
+
+// --- Profiling global variables ---
+float avgEthTaskTime = 0.0f;
+float avgTestTaskTime = 0.0f;
+float avgCrcTime = 0.0f;
+float avgUartTime = 0.0f;
 
 /**
  * @brief Safely reads the 32-bit hardware timer, preventing rollover glitches.
@@ -73,15 +83,19 @@ void GseController::Init() {
     // Ethernet task always sends data even if sensors didn't all read properly
     ethTaskId         = *scheduler.AddTask(TransmitEthernetTask, 0);
 
+    // Test task that counts up every time it's scheduled
+    testTaskId        = *scheduler.AddTask(TestCounterTask, 0);
+
     // On startup, schedule all tasks to run immediately
     uint32_t startTime = GetCurrentTime();
-    scheduler.ScheduleTask(cmdTaskId, startTime);
-    scheduler.ScheduleTask(solenoidTaskId, startTime);
-    scheduler.ScheduleTask(igniterTaskId, startTime);
-    scheduler.ScheduleTask(alarmTaskId, startTime);
-    scheduler.ScheduleTask(internalAdcTaskId, startTime);
-    scheduler.ScheduleTask(initExtAdcTaskId, startTime);
-    scheduler.ScheduleTask(tcTaskId, startTime);
+    scheduler.ScheduleTask(testTaskId, startTime);
+    // scheduler.ScheduleTask(cmdTaskId, startTime);
+    // scheduler.ScheduleTask(solenoidTaskId, startTime);
+    // scheduler.ScheduleTask(igniterTaskId, startTime);
+    // scheduler.ScheduleTask(alarmTaskId, startTime);
+    // scheduler.ScheduleTask(internalAdcTaskId, startTime);
+    // scheduler.ScheduleTask(initExtAdcTaskId, startTime);
+    // scheduler.ScheduleTask(tcTaskId, startTime);
     scheduler.ScheduleTask(ethTaskId, startTime);
 
     // Note: fetchExtAdcTaskId is intentionally not scheduled here; it waits for the I2C interrupt
@@ -156,7 +170,7 @@ void GseController::ProcessCommandsTask() {
     instance->scheduler.SetDependency(instance->igniterTaskId, 0, true);
     instance->scheduler.SetDependency(instance->alarmTaskId, 0, true);
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->cmdTaskId, nextRun);
 }
 
@@ -183,7 +197,7 @@ void GseController::SwitchSolenoidsTask() {
     instance->scheduler.SetDependency(instance->initExtAdcTaskId, 0, true);
     instance->scheduler.SetDependency(instance->tcTaskId, 0, true);
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->solenoidTaskId, nextRun);
 }
 
@@ -213,7 +227,7 @@ void GseController::FireIgnitersTask() {
     instance->scheduler.SetDependency(instance->initExtAdcTaskId, 1, true);
     instance->scheduler.SetDependency(instance->tcTaskId, 1, true);
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->igniterTaskId, nextRun);
 }
 
@@ -229,7 +243,7 @@ void GseController::SetAlarmTask() {
     instance->scheduler.SetDependency(instance->initExtAdcTaskId, 2, true);
     instance->scheduler.SetDependency(instance->tcTaskId, 2, true);
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->alarmTaskId, nextRun);
 }
 
@@ -246,7 +260,7 @@ void GseController::ReadInternalAdcTask() {
         *(((uint32_t *)&rawData) + i) += val;
     }
 
-    // update transmit data struct
+    // Update transmit data struct
     instance->data.supplyVoltage0     = 0.0062f * (float)rawData.pwr0 + 0.435f;
     instance->data.supplyVoltage1     = 0.0062f * (float)rawData.pwr1 + 0.435f;
     instance->data.solenoidCurrent0   = 0.000817f * (float)rawData.s0;
@@ -262,7 +276,7 @@ void GseController::ReadInternalAdcTask() {
     instance->data.solenoidCurrent10  = 0.000817f * (float)rawData.s0;
     instance->data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->internalAdcTaskId, nextRun);
 }
 
@@ -273,7 +287,7 @@ void GseController::InitiateExternalAdcReadTask() {
     // Begin async read of external ADC for all 8 channels (0xFF)
     instance->external_adc.StartReadAsync(0xFF);
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->initExtAdcTaskId, nextRun);
 }
 
@@ -296,7 +310,7 @@ void GseController::ReadThermocouplesTask() {
     //     instance->data.temperature2 = tcData.tcTemperature;
     // }
 
-    nextRun += 100;
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->tcTaskId, nextRun);
 }
 
@@ -342,17 +356,60 @@ void GseController::FetchExternalAdcTask() {
 }
 
 void GseController::TransmitEthernetTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
     // Ethernet - send freshest data regardless of dependencies
     instance->data.timestamp = GetCurrentTime(); 
-    uint32_t crc = Crc32((uint8_t *)&instance->data, sizeof(GseData) - 4);
-    instance->data.crc = crc;
-    HAL_UART_Transmit(&huart3, (uint8_t *)&instance->data, sizeof(GseData), 100);
 
-    nextRun += 100;
+    // Profile CRC execution
+    uint32_t crcStartTime = GetCurrentTime();
+    uint32_t crc = Crc32((uint8_t *)&instance->data, sizeof(GseData) - 4);
+    uint32_t crcDelta = GetCurrentTime() - crcStartTime;
+
+    instance->data.crc = crc;
+    // Set last two bytes to 0x67
+    instance->data.crc = 0x67676767;
+
+    // Profile UART Transmit execution
+    uint32_t uartStartTime = GetCurrentTime();
+    HAL_UART_Transmit(&huart3, (uint8_t *)&instance->data, sizeof(GseData), 100);
+    uint32_t uartDelta = GetCurrentTime() - uartStartTime;
+
+    nextRun += 10;
     instance->scheduler.ScheduleTask(instance->ethTaskId, nextRun);
+
+    // Profile total task execution
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+
+    // Update Exponential Moving Averages (EMA) for live view stability (10% new, 90% history)
+    avgCrcTime = (avgCrcTime == 0.0f) ? (float)crcDelta : (avgCrcTime * 0.9f) + ((float)crcDelta * 0.1f);
+    avgUartTime = (avgUartTime == 0.0f) ? (float)uartDelta : (avgUartTime * 0.9f) + ((float)uartDelta * 0.1f);
+    avgEthTaskTime = (avgEthTaskTime == 0.0f) ? (float)taskDelta : (avgEthTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+}
+
+void GseController::TestCounterTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+    
+    static uint32_t nextRun = 0;
+    if (nextRun == 0) nextRun = GetCurrentTime(); // Ensure timer aligns with boot time
+
+    ++counter;
+    timestamp = (float)GetCurrentTime();
+    
+    // Timestamp is in milliseconds (guarded against division by zero)
+    if (timestamp > 0.0f) {
+        hz = (float)counter / (timestamp / 1000.0f);
+    }
+
+    nextRun += 10;
+    instance->scheduler.ScheduleTask(instance->testTaskId, nextRun);
+
+    // Profile total task execution
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgTestTaskTime = (avgTestTaskTime == 0.0f) ? (float)taskDelta : (avgTestTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 // --- Global C callback routers ---
