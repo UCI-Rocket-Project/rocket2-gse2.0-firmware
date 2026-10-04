@@ -10,7 +10,7 @@
             "cacheVariables": {}
         },
         {
-            "name": "Debug",
+            "name": "FirmwareDebug",
             "displayName": "Firmware (Debug)",
             "inherits": "default",
             "cacheVariables": {
@@ -38,8 +38,8 @@
     ],
     "buildPresets": [
         {
-            "name": "Debug",
-            "configurePreset": "Debug"
+            "name": "FirmwareDebug",
+            "configurePreset": "FirmwareDebug"
         },
         {
             "name": "Release",

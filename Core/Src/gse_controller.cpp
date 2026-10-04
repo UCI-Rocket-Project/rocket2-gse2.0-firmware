@@ -21,6 +21,14 @@ float avgEthTaskTime = 0.0f;
 float avgTestTaskTime = 0.0f;
 float avgCrcTime = 0.0f;
 float avgUartTime = 0.0f;
+float avgCmdTaskTime = 0.0f;
+float avgSolenoidTaskTime = 0.0f;
+float avgIgniterTaskTime = 0.0f;
+float avgAlarmTaskTime = 0.0f;
+float avgInternalAdcTaskTime = 0.0f;
+float avgExternalAdcInitTaskTime = 0.0f;
+float avgExternalAdcFetchTaskTime = 0.0f;
+float avgThermocoupleTaskTime = 0.0f;
 
 /**
  * @brief Safely reads the 32-bit hardware timer, preventing rollover glitches.
@@ -89,16 +97,15 @@ void GseController::Init() {
     // On startup, schedule all tasks to run immediately
     uint32_t startTime = GetCurrentTime();
     scheduler.ScheduleTask(testTaskId, startTime);
-    // scheduler.ScheduleTask(cmdTaskId, startTime);
-    // scheduler.ScheduleTask(solenoidTaskId, startTime);
-    // scheduler.ScheduleTask(igniterTaskId, startTime);
-    // scheduler.ScheduleTask(alarmTaskId, startTime);
-    // scheduler.ScheduleTask(internalAdcTaskId, startTime);
-    // scheduler.ScheduleTask(initExtAdcTaskId, startTime);
-    // scheduler.ScheduleTask(tcTaskId, startTime);
+    scheduler.ScheduleTask(cmdTaskId, startTime);
+    scheduler.ScheduleTask(solenoidTaskId, startTime);
+    scheduler.ScheduleTask(igniterTaskId, startTime);
+    scheduler.ScheduleTask(alarmTaskId, startTime);
+    scheduler.ScheduleTask(internalAdcTaskId, startTime);
+    // WARNING currently breaks other tasks
+    scheduler.ScheduleTask(initExtAdcTaskId, startTime);
+    scheduler.ScheduleTask(tcTaskId, startTime);
     scheduler.ScheduleTask(ethTaskId, startTime);
-
-    // Note: fetchExtAdcTaskId is intentionally not scheduled here; it waits for the I2C interrupt
 }
 
 void GseController::Run() {
@@ -125,6 +132,8 @@ void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
 
 // --- Static task callbacks ---
 void GseController::ProcessCommandsTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime(); // Init on first run
 
@@ -172,9 +181,14 @@ void GseController::ProcessCommandsTask() {
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->cmdTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgCmdTaskTime = (avgCmdTaskTime == 0.0f) ? (float)taskDelta : (avgCmdTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::SwitchSolenoidsTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
@@ -199,9 +213,14 @@ void GseController::SwitchSolenoidsTask() {
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->solenoidTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgSolenoidTaskTime = (avgSolenoidTaskTime == 0.0f) ? (float)taskDelta : (avgSolenoidTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::FireIgnitersTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
@@ -229,9 +248,14 @@ void GseController::FireIgnitersTask() {
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->igniterTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgIgniterTaskTime = (avgIgniterTaskTime == 0.0f) ? (float)taskDelta : (avgIgniterTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::SetAlarmTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
@@ -245,9 +269,14 @@ void GseController::SetAlarmTask() {
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->alarmTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgAlarmTaskTime = (avgAlarmTaskTime == 0.0f) ? (float)taskDelta : (avgAlarmTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::ReadInternalAdcTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
@@ -278,20 +307,30 @@ void GseController::ReadInternalAdcTask() {
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->internalAdcTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgInternalAdcTaskTime = (avgInternalAdcTaskTime == 0.0f) ? (float)taskDelta : (avgInternalAdcTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::InitiateExternalAdcReadTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
     // Begin async read of external ADC for all 8 channels (0xFF)
-    instance->external_adc.StartReadAsync(0xFF);
+    bool result = instance->external_adc.StartReadAsync(0xFF);
+    instance->data.solenoidInternalState0 = result;
 
-    nextRun += 10;
-    instance->scheduler.ScheduleTask(instance->initExtAdcTaskId, nextRun);
+    // Should only reschedule this task if the channel selection changes (e.g. from GUI inputs)
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgExternalAdcInitTaskTime = (avgExternalAdcInitTaskTime == 0.0f) ? (float)taskDelta : (avgExternalAdcInitTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::ReadThermocouplesTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
@@ -312,9 +351,14 @@ void GseController::ReadThermocouplesTask() {
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->tcTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgThermocoupleTaskTime = (avgThermocoupleTaskTime == 0.0f) ? (float)taskDelta : (avgThermocoupleTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::FetchExternalAdcTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
     // Read external ADC if interrupt finished
     if (instance->external_adc.IsDataReady()) {
         auto optData = instance->external_adc.FetchData(); // Calling this resets driver to IDLE state
@@ -353,6 +397,9 @@ void GseController::FetchExternalAdcTask() {
     }
     // Note: Does NOT self-reschedule. This task remains dormant until the ADC read completes and the ISR
     // schedules it manually again
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgExternalAdcFetchTaskTime = (avgExternalAdcFetchTaskTime == 0.0f) ? (float)taskDelta : (avgExternalAdcFetchTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::TransmitEthernetTask() {
