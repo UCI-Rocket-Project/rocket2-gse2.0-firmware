@@ -2,7 +2,7 @@
 #include <mutex>
 #include <vector>
 
-#include "../Core/Inc/task_scheduler.h"
+#include "../RocketDrivers/task_scheduler/task_scheduler.h"
 
 // Define the simulated critical section mutex for the PC build
 std::mutex test_mutex;
