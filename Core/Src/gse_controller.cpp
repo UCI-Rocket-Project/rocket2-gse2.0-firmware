@@ -81,9 +81,9 @@ void GseController::Init() {
     alarmTaskId       = *scheduler.AddTask(SetAlarmTask, 1);
 
     // Sensor reading, requires actuation first
-    internalAdcTaskId = *scheduler.AddTask(ReadInternalAdcTask, 3);
-    initExtAdcTaskId  = *scheduler.AddTask(InitiateExternalAdcReadTask, 3);
-    tcTaskId          = *scheduler.AddTask(ReadThermocouplesTask, 3);
+    internalAdcTaskId = *scheduler.AddTask(ReadInternalAdcTask, 0);
+    initExtAdcTaskId  = *scheduler.AddTask(InitiateExternalAdcReadTask, 0);
+    tcTaskId          = *scheduler.AddTask(ReadThermocouplesTask, 0);
 
     // Special task called by interrupt after external ADC reads data async
     fetchExtAdcTaskId = *scheduler.AddTask(FetchExternalAdcTask, 0); 
@@ -206,11 +206,6 @@ void GseController::SwitchSolenoidsTask() {
     HAL_GPIO_WritePin(SOLENOID10_EN_GPIO_Port,  SOLENOID10_EN_Pin,  (GPIO_PinState)instance->solenoidState10);
     HAL_GPIO_WritePin(SOLENOID11_EN_GPIO_Port,  SOLENOID11_EN_Pin,  (GPIO_PinState)instance->solenoidState11);
 
-    // Notify sensor tasks that solenoids have been switched (dependency 0)
-    instance->scheduler.SetDependency(instance->internalAdcTaskId, 0, true);
-    instance->scheduler.SetDependency(instance->initExtAdcTaskId, 0, true);
-    instance->scheduler.SetDependency(instance->tcTaskId, 0, true);
-
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->solenoidTaskId, nextRun);
 
@@ -241,11 +236,6 @@ void GseController::FireIgnitersTask() {
         HAL_GPIO_WritePin(EMATCH1_FIRE_GPIO_Port, EMATCH1_FIRE_Pin, GPIO_PIN_RESET);
     }
 
-    // Notify sensor tasks that igniters have been fired (dependency 1)
-    instance->scheduler.SetDependency(instance->internalAdcTaskId, 1, true);
-    instance->scheduler.SetDependency(instance->initExtAdcTaskId, 1, true);
-    instance->scheduler.SetDependency(instance->tcTaskId, 1, true);
-
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->igniterTaskId, nextRun);
 
@@ -261,11 +251,6 @@ void GseController::SetAlarmTask() {
 
     // alarm
     HAL_GPIO_WritePin(ALARM_GPIO_Port, ALARM_Pin, (GPIO_PinState)instance->alarmState);
-
-    // Trigger Sensor Tasks (Dep 2)
-    instance->scheduler.SetDependency(instance->internalAdcTaskId, 2, true);
-    instance->scheduler.SetDependency(instance->initExtAdcTaskId, 2, true);
-    instance->scheduler.SetDependency(instance->tcTaskId, 2, true);
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->alarmTaskId, nextRun);
