@@ -20,6 +20,7 @@ class GseController {
     // Hardware interrupt routers, internal logic to attach to extern C block
     void OnUartRx(UART_HandleTypeDef *huart);
     void OnI2cRx(I2C_HandleTypeDef *hi2c);
+    void OnAdcDmaComplete(ADC_HandleTypeDef *hadc);
 
   private:
     // Internal state variables
@@ -34,6 +35,9 @@ class GseController {
     bool igniterState0 = 0, igniterState1 = 0;
     bool alarmState = 0;
 
+    // DMA buffer for internal ADC — 14 channels, written to by DMA hardware
+    uint32_t adcDmaBuffer[14] = {0};
+
     // Hardware object handles
     AdcMax11614i2c external_adc;
     TcMax31855Spi tc0;
@@ -41,9 +45,10 @@ class GseController {
     TcMax31855Spi tc2;
 
     // Task scheduler setup
-    TaskScheduler<10, 3> scheduler;
+    TaskScheduler<11, 3> scheduler;
     size_t cmdTaskId, solenoidTaskId, igniterTaskId, alarmTaskId;
-    size_t internalAdcTaskId, initExtAdcTaskId, tcTaskId, fetchExtAdcTaskId, ethTaskId;
+    size_t initInternalAdcTaskId, fetchInternalAdcTaskId;
+    size_t initExtAdcTaskId, tcTaskId, fetchExtAdcTaskId, ethTaskId;
     size_t testTaskId;
 
     // Task callbacks
@@ -51,7 +56,8 @@ class GseController {
     static void SwitchSolenoidsTask();
     static void FireIgnitersTask();
     static void SetAlarmTask();
-    static void ReadInternalAdcTask();
+    static void InitiateInternalAdcTask();
+    static void FetchInternalAdcTask();
     static void InitiateExternalAdcReadTask();
     static void ReadThermocouplesTask();
     static void FetchExternalAdcTask();

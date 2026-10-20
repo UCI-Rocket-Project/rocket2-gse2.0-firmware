@@ -85,7 +85,7 @@ if(CMAKE_C_COMPILER MATCHES "arm-none-eabi")
     )
 
 else()
-    message(STATUS "Native compiler detected: configuring unit Ttsts")
+    message(STATUS "Native compiler detected: configuring unit tests")
     
     # Enable CTest integration for the VS Code UI
     include(CTest)

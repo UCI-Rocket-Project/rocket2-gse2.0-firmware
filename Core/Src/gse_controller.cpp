@@ -25,7 +25,8 @@ float avgCmdTaskTime = 0.0f;
 float avgSolenoidTaskTime = 0.0f;
 float avgIgniterTaskTime = 0.0f;
 float avgAlarmTaskTime = 0.0f;
-float avgInternalAdcTaskTime = 0.0f;
+float avgInternalAdcInitTaskTime = 0.0f;
+float avgInternalAdcFetchTaskTime = 0.0f;
 float avgExternalAdcInitTaskTime = 0.0f;
 float avgExternalAdcFetchTaskTime = 0.0f;
 float avgThermocoupleTaskTime = 0.0f;
@@ -65,6 +66,14 @@ void GseController::Init() {
     AdcMax11614i2c::Config adcConfig;
     external_adc.Init(adcConfig);
 
+    // Reconfigure ADC1: disable discontinuous mode so a single start converts all 14 channels,
+    // which is required for DMA to transfer the full scan sequence in one shot.
+    hadc1.Init.DiscontinuousConvMode = DISABLE;
+    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+        Error_Handler();
+    }
+    HAL_ADCEx_Calibration_Start(&hadc1);
+
     HAL_TIM_Base_Start(&htim4);
     HAL_TIM_Base_Start(&htim5);
 
@@ -81,11 +90,12 @@ void GseController::Init() {
     alarmTaskId       = *scheduler.AddTask(SetAlarmTask, 1);
 
     // Sensor reading, requires actuation first
-    internalAdcTaskId = *scheduler.AddTask(ReadInternalAdcTask, 0);
+    initInternalAdcTaskId  = *scheduler.AddTask(InitiateInternalAdcTask, 0);
     initExtAdcTaskId  = *scheduler.AddTask(InitiateExternalAdcReadTask, 0);
     tcTaskId          = *scheduler.AddTask(ReadThermocouplesTask, 0);
 
-    // Special task called by interrupt after external ADC reads data async
+    // Special tasks called by interrupts after DMA/I2C completes async reads
+    fetchInternalAdcTaskId = *scheduler.AddTask(FetchInternalAdcTask, 0);
     fetchExtAdcTaskId = *scheduler.AddTask(FetchExternalAdcTask, 0); 
 
     // Ethernet task always sends data even if sensors didn't all read properly
@@ -101,7 +111,7 @@ void GseController::Init() {
     scheduler.ScheduleTask(solenoidTaskId, startTime);
     scheduler.ScheduleTask(igniterTaskId, startTime);
     scheduler.ScheduleTask(alarmTaskId, startTime);
-    scheduler.ScheduleTask(internalAdcTaskId, startTime);
+    scheduler.ScheduleTask(initInternalAdcTaskId, startTime);
     // WARNING currently breaks other tasks
     scheduler.ScheduleTask(initExtAdcTaskId, startTime);
     scheduler.ScheduleTask(tcTaskId, startTime);
@@ -127,6 +137,12 @@ void GseController::OnUartRx(UART_HandleTypeDef *huart) {
 void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
     if (hi2c->Instance == I2C1) {
         scheduler.ScheduleTask(fetchExtAdcTaskId, GetCurrentTime());
+    }
+}
+
+void GseController::OnAdcDmaComplete(ADC_HandleTypeDef *hadc) {
+    if (hadc->Instance == ADC1) {
+        scheduler.ScheduleTask(fetchInternalAdcTaskId, GetCurrentTime());
     }
 }
 
@@ -259,20 +275,31 @@ void GseController::SetAlarmTask() {
     avgAlarmTaskTime = (avgAlarmTaskTime == 0.0f) ? (float)taskDelta : (avgAlarmTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
-void GseController::ReadInternalAdcTask() {
+void GseController::InitiateInternalAdcTask() {
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
-    // STM32 internal ADC operations
-    Stm32AdcData rawData = {0};
-    for (int i = 0; i < 14; i++) {
-        HAL_ADC_Start(&hadc1);
-        HAL_ADC_PollForConversion(&hadc1, 10);
-        uint32_t val = HAL_ADC_GetValue(&hadc1);
-        *(((uint32_t *)&rawData) + i) += val;
-    }
+    // Kick off DMA transfer for all 14 ADC channels — returns immediately.
+    // When all conversions complete, DMA interrupt fires HAL_ADC_ConvCpltCallback,
+    // which schedules FetchInternalAdcTask to process the results.
+    HAL_ADC_Start_DMA(&hadc1, instance->adcDmaBuffer, 14);
+
+    nextRun += 10;
+    instance->scheduler.ScheduleTask(instance->initInternalAdcTaskId, nextRun);
+
+    uint32_t taskDelta = GetCurrentTime() - taskStartTime;
+    avgInternalAdcInitTaskTime = (avgInternalAdcInitTaskTime == 0.0f) ? (float)taskDelta : (avgInternalAdcInitTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+}
+
+void GseController::FetchInternalAdcTask() {
+    uint32_t taskStartTime = GetCurrentTime();
+
+    // DMA has filled adcDmaBuffer with 14 channel values in rank order.
+    // Map the buffer through the Stm32AdcData struct for named access.
+    Stm32AdcData rawData;
+    memcpy(&rawData, instance->adcDmaBuffer, sizeof(Stm32AdcData));
 
     // Update transmit data struct
     instance->data.supplyVoltage0     = 0.0062f * (float)rawData.pwr0 + 0.435f;
@@ -290,11 +317,11 @@ void GseController::ReadInternalAdcTask() {
     instance->data.solenoidCurrent10  = 0.000817f * (float)rawData.s0;
     instance->data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
 
-    nextRun += 10;
-    instance->scheduler.ScheduleTask(instance->internalAdcTaskId, nextRun);
+    // Note: Does NOT self-reschedule. This task remains dormant until the next DMA
+    // transfer completes and the ISR schedules it again.
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgInternalAdcTaskTime = (avgInternalAdcTaskTime == 0.0f) ? (float)taskDelta : (avgInternalAdcTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    avgInternalAdcFetchTaskTime = (avgInternalAdcFetchTaskTime == 0.0f) ? (float)taskDelta : (avgInternalAdcFetchTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
 void GseController::InitiateExternalAdcReadTask() {
@@ -303,8 +330,8 @@ void GseController::InitiateExternalAdcReadTask() {
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
-    // Begin async read of external ADC for all 8 channels (0xFF)
-    bool result = instance->external_adc.StartReadAsync(0xFF);
+    // Begin async read of external ADC for all 8 channels (0xFF) which is default config
+    bool result = instance->external_adc.StartReadAsync();
     instance->data.solenoidInternalState0 = result;
 
     // Should only reschedule this task if the channel selection changes (e.g. from GUI inputs)
@@ -459,11 +486,13 @@ extern "C" {
         }
     }
 
-    void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c) {
-        AdcMax11614i2c::HAL_TxCpltCallback(hi2c);
-    }
-
     void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c) {
         AdcMax11614i2c::HAL_ErrorCallback(hi2c);
+    }
+
+    void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
+        if (GseController::instance) {
+            GseController::instance->OnAdcDmaComplete(hadc);
+        }
     }
 }
