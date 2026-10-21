@@ -41,6 +41,7 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
 DMA_HandleTypeDef hdma_adc1;
+DMA_HandleTypeDef hdma_usart3_tx;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -442,7 +443,27 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
     HAL_NVIC_SetPriority(USART3_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(USART3_IRQn);
     /* USER CODE BEGIN USART3_MspInit 1 */
+    /* DMA1 Channel 2 for USART3_TX */
+    __HAL_RCC_DMA1_CLK_ENABLE();
 
+    hdma_usart3_tx.Instance = DMA1_Channel2;
+    hdma_usart3_tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
+    hdma_usart3_tx.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_usart3_tx.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_usart3_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart3_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    hdma_usart3_tx.Init.Mode = DMA_NORMAL;
+    hdma_usart3_tx.Init.Priority = DMA_PRIORITY_LOW;
+    if (HAL_DMA_Init(&hdma_usart3_tx) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    __HAL_LINKDMA(huart, hdmatx, hdma_usart3_tx);
+
+    /* DMA1 Channel 2 interrupt */
+    HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
     /* USER CODE END USART3_MspInit 1 */
 
   }
@@ -474,7 +495,11 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
     /* USART3 interrupt DeInit */
     HAL_NVIC_DisableIRQ(USART3_IRQn);
     /* USER CODE BEGIN USART3_MspDeInit 1 */
-
+    if (huart->hdmatx != NULL)
+    {
+      HAL_DMA_DeInit(huart->hdmatx);
+    }
+    HAL_NVIC_DisableIRQ(DMA1_Channel2_IRQn);
     /* USER CODE END USART3_MspDeInit 1 */
   }
 

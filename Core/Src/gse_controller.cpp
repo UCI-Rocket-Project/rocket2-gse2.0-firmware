@@ -134,6 +134,12 @@ void GseController::OnUartRx(UART_HandleTypeDef *huart) {
     HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
 }
 
+void GseController::OnUartTx(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART3) {
+        // Callback router for USART3 TX DMA completion
+    }
+}
+
 void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
     if (hi2c->Instance == I2C1) {
         scheduler.ScheduleTask(fetchExtAdcTaskId, GetCurrentTime());
@@ -306,16 +312,16 @@ void GseController::FetchInternalAdcTask() {
     instance->data.supplyVoltage1     = 0.0062f * (float)rawData.pwr1 + 0.435f;
     instance->data.solenoidCurrent0   = 0.000817f * (float)rawData.s0;
     instance->data.solenoidCurrent1   = 0.000817f * (float)rawData.s1;
-    instance->data.solenoidCurrent2   = 0.000817f * (float)rawData.s0;
-    instance->data.solenoidCurrent3   = 0.000817f * (float)rawData.s1;
-    instance->data.solenoidCurrent4   = 0.000817f * (float)rawData.s0;
-    instance->data.solenoidCurrent5   = 0.000817f * (float)rawData.s1;
-    instance->data.solenoidCurrent6   = 0.000817f * (float)rawData.s0;
-    instance->data.solenoidCurrent7   = 0.000817f * (float)rawData.s1;
-    instance->data.solenoidCurrent8   = 0.000817f * (float)rawData.s0;
-    instance->data.solenoidCurrent9   = 0.000817f * (float)rawData.s1;
-    instance->data.solenoidCurrent10  = 0.000817f * (float)rawData.s0;
-    instance->data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
+    instance->data.solenoidCurrent2   = 0.000817f * (float)rawData.s2;
+    instance->data.solenoidCurrent3   = 0.000817f * (float)rawData.s3;
+    instance->data.solenoidCurrent4   = 0.000817f * (float)rawData.s4;
+    instance->data.solenoidCurrent5   = 0.000817f * (float)rawData.s5;
+    instance->data.solenoidCurrent6   = 0.000817f * (float)rawData.s6;
+    instance->data.solenoidCurrent7   = 0.000817f * (float)rawData.s7;
+    instance->data.solenoidCurrent8   = 0.000817f * (float)rawData.s8;
+    instance->data.solenoidCurrent9   = 0.000817f * (float)rawData.s9;
+    instance->data.solenoidCurrent10  = 0.000817f * (float)rawData.s10;
+    instance->data.solenoidCurrent11  = 0.000817f * (float)rawData.s11;
 
     // Note: Does NOT self-reschedule. This task remains dormant until the next DMA
     // transfer completes and the ISR schedules it again.
@@ -420,32 +426,38 @@ void GseController::TransmitEthernetTask() {
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
-    // Ethernet - send freshest data regardless of dependencies
-    instance->data.timestamp = GetCurrentTime(); 
+    // Only start a new transmission if the previous DMA transfer has completed
+    if (huart3.gState == HAL_UART_STATE_READY) {
+        // Ethernet - send freshest data regardless of dependencies
+        instance->data.timestamp = GetCurrentTime(); 
 
-    // Profile CRC execution
-    uint32_t crcStartTime = GetCurrentTime();
-    uint32_t crc = Crc32((uint8_t *)&instance->data, sizeof(GseData) - 4);
-    uint32_t crcDelta = GetCurrentTime() - crcStartTime;
+        // Profile CRC execution
+        uint32_t crcStartTime = GetCurrentTime();
+        uint32_t crc = Crc32((uint8_t *)&instance->data, sizeof(GseData) - 4);
+        uint32_t crcDelta = GetCurrentTime() - crcStartTime;
 
-    instance->data.crc = crc;
-    // Set last two bytes to 0x67
-    instance->data.crc = 0x67676767;
+        instance->data.crc = crc;
+        // Set last two bytes to 0x67
+        instance->data.crc = 0x67676767;
 
-    // Profile UART Transmit execution
-    uint32_t uartStartTime = GetCurrentTime();
-    HAL_UART_Transmit(&huart3, (uint8_t *)&instance->data, sizeof(GseData), 100);
-    uint32_t uartDelta = GetCurrentTime() - uartStartTime;
+        // Snapshot to separate TX buffer to prevent data tearing and CRC mismatch during background DMA
+        memcpy(&instance->ethTxBuffer, &instance->data, sizeof(GseData));
+
+        // Profile UART Transmit DMA initiation
+        uint32_t uartStartTime = GetCurrentTime();
+        HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&instance->ethTxBuffer, sizeof(GseData));
+        uint32_t uartDelta = GetCurrentTime() - uartStartTime;
+
+        // Update Exponential Moving Averages (EMA) for live view stability (10% new, 90% history)
+        avgCrcTime = (avgCrcTime == 0.0f) ? (float)crcDelta : (avgCrcTime * 0.9f) + ((float)crcDelta * 0.1f);
+        avgUartTime = (avgUartTime == 0.0f) ? (float)uartDelta : (avgUartTime * 0.9f) + ((float)uartDelta * 0.1f);
+    }
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->ethTaskId, nextRun);
 
     // Profile total task execution
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-
-    // Update Exponential Moving Averages (EMA) for live view stability (10% new, 90% history)
-    avgCrcTime = (avgCrcTime == 0.0f) ? (float)crcDelta : (avgCrcTime * 0.9f) + ((float)crcDelta * 0.1f);
-    avgUartTime = (avgUartTime == 0.0f) ? (float)uartDelta : (avgUartTime * 0.9f) + ((float)uartDelta * 0.1f);
     avgEthTaskTime = (avgEthTaskTime == 0.0f) ? (float)taskDelta : (avgEthTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
@@ -476,6 +488,12 @@ extern "C" {
     void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
         if (GseController::instance) {
             GseController::instance->OnUartRx(huart);
+        }
+    }
+
+    void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+        if (GseController::instance) {
+            GseController::instance->OnUartTx(huart);
         }
     }
 

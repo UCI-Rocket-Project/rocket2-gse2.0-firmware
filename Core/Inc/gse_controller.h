@@ -19,6 +19,7 @@ class GseController {
 
     // Hardware interrupt routers, internal logic to attach to extern C block
     void OnUartRx(UART_HandleTypeDef *huart);
+    void OnUartTx(UART_HandleTypeDef *huart);
     void OnI2cRx(I2C_HandleTypeDef *hi2c);
     void OnAdcDmaComplete(ADC_HandleTypeDef *hadc);
 
@@ -28,6 +29,7 @@ class GseController {
     GseCommand command;
     uint8_t commandBuffer[sizeof(GseCommand)];
     GseData data;
+    GseData ethTxBuffer;
 
     bool solenoidState0 = 0, solenoidState1 = 0, solenoidState2 = 0, solenoidState3 = 0;
     bool solenoidState4 = 0, solenoidState5 = 0, solenoidState6 = 0, solenoidState7 = 0;
