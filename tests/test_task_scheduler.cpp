@@ -173,3 +173,29 @@ TEST_F(TaskSchedulerTest, TimerRollover) {
     scheduler.Run(0x00000005); 
     EXPECT_TRUE(taskCRan) << "Rollover arithmetic failed.";
 }
+
+// Tests whether self-rescheduling tasks function properly when other tasks have unmet dependencies
+TEST_F(TaskSchedulerTest, DependenciesWithSelfRescheduling) {
+    TaskScheduler<10, 2> scheduler;
+    currentScheduler = &scheduler;
+
+    auto idDep = scheduler.AddTask(TaskB_Callback, 1); // Unmet dependency
+    auto idResched = scheduler.AddTask(SelfRescheduling_Callback, 0); // Self-reschedules
+    ASSERT_TRUE(idDep.has_value());
+    ASSERT_TRUE(idResched.has_value());
+    taskA_id = *idResched;
+
+    scheduler.ScheduleTask(*idDep, 10);
+    scheduler.ScheduleTask(*idResched, 10);
+
+    // At t=10: idDep has unmet dep, idResched runs and schedules for t=20
+    scheduler.Run(10);
+    EXPECT_EQ(runCount, 1);
+    EXPECT_FALSE(taskBRan);
+
+    // Satisfy dependency and run at t=20
+    scheduler.SetDependency(*idDep, 0, true);
+    scheduler.Run(20);
+    EXPECT_EQ(runCount, 2);
+    EXPECT_TRUE(taskBRan);
+}

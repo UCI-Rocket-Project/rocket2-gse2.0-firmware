@@ -25,11 +25,36 @@ float avgCmdTaskTime = 0.0f;
 float avgSolenoidTaskTime = 0.0f;
 float avgIgniterTaskTime = 0.0f;
 float avgAlarmTaskTime = 0.0f;
+float avgInternalAdcTaskTime = 0.0f;
 float avgInternalAdcInitTaskTime = 0.0f;
 float avgInternalAdcFetchTaskTime = 0.0f;
 float avgExternalAdcInitTaskTime = 0.0f;
 float avgExternalAdcFetchTaskTime = 0.0f;
 float avgThermocoupleTaskTime = 0.0f;
+
+// --- Task run counters (inspectable in Live Watch to confirm loop execution) ---
+volatile uint32_t cmdTaskRunCount = 0;
+volatile uint32_t solenoidTaskRunCount = 0;
+volatile uint32_t igniterTaskRunCount = 0;
+volatile uint32_t alarmTaskRunCount = 0;
+volatile uint32_t internalAdcTaskRunCount = 0;
+volatile uint32_t tcTaskRunCount = 0;
+volatile uint32_t ethTaskRunCount = 0;
+volatile uint32_t ethTxRunCount = 0;
+volatile uint32_t externalAdcFetchRunCount = 0;
+
+// --- Cumulative task run times (in ms) for true average calculation ---
+uint64_t totalEthTaskTime = 0;
+uint64_t totalTestTaskTime = 0;
+uint64_t totalCrcTime = 0;
+uint64_t totalUartTime = 0;
+uint64_t totalCmdTaskTime = 0;
+uint64_t totalSolenoidTaskTime = 0;
+uint64_t totalIgniterTaskTime = 0;
+uint64_t totalAlarmTaskTime = 0;
+uint64_t totalInternalAdcTaskTime = 0;
+uint64_t totalThermocoupleTaskTime = 0;
+uint64_t totalExternalAdcFetchTaskTime = 0;
 
 /**
  * @brief Safely reads the 32-bit hardware timer, preventing rollover glitches.
@@ -66,9 +91,12 @@ void GseController::Init() {
     AdcMax11614i2c::Config adcConfig;
     external_adc.Init(adcConfig);
 
-    // Reconfigure ADC1: disable discontinuous mode so a single start converts all 14 channels,
-    // which is required for DMA to transfer the full scan sequence in one shot.
+    // Reconfigure ADC1 for continuous scan mode with circular DMA:
+    // All 14 channels are converted continuously in hardware into adcDmaBuffer.
+    hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
+    hadc1.Init.ContinuousConvMode = ENABLE;
     hadc1.Init.DiscontinuousConvMode = DISABLE;
+    hadc1.Init.NbrOfConversion = 14;
     if (HAL_ADC_Init(&hadc1) != HAL_OK) {
         Error_Handler();
     }
@@ -82,27 +110,27 @@ void GseController::Init() {
     // --- Task ID registration ---
     // Note the number of dependencies for each task
     // Command processing task
-    cmdTaskId         = *scheduler.AddTask(ProcessCommandsTask, 0);
+    cmdTaskId             = *scheduler.AddTask(ProcessCommandsTask, 0);
 
     // Hardware actuation
-    solenoidTaskId    = *scheduler.AddTask(SwitchSolenoidsTask, 1);
-    igniterTaskId     = *scheduler.AddTask(FireIgnitersTask, 1);
-    alarmTaskId       = *scheduler.AddTask(SetAlarmTask, 1);
+    solenoidTaskId        = *scheduler.AddTask(SwitchSolenoidsTask, 1);
+    igniterTaskId         = *scheduler.AddTask(FireIgnitersTask, 1);
+    alarmTaskId           = *scheduler.AddTask(SetAlarmTask, 1);
 
     // Sensor reading, requires actuation first
-    initInternalAdcTaskId  = *scheduler.AddTask(InitiateInternalAdcTask, 0);
-    initExtAdcTaskId  = *scheduler.AddTask(InitiateExternalAdcReadTask, 0);
-    tcTaskId          = *scheduler.AddTask(ReadThermocouplesTask, 0);
+    initInternalAdcTaskId = *scheduler.AddTask(InitiateInternalAdcTask, 0);
+    internalAdcTaskId     = *scheduler.AddTask(ReadInternalAdcTask, 0);
+    initExtAdcTaskId      = *scheduler.AddTask(InitiateExternalAdcReadTask, 0);
+    tcTaskId              = *scheduler.AddTask(ReadThermocouplesTask, 0);
 
-    // Special tasks called by interrupts after DMA/I2C completes async reads
-    fetchInternalAdcTaskId = *scheduler.AddTask(FetchInternalAdcTask, 0);
-    fetchExtAdcTaskId = *scheduler.AddTask(FetchExternalAdcTask, 0); 
+    // Special task called by interrupt after external ADC reads data async
+    fetchExtAdcTaskId     = *scheduler.AddTask(FetchExternalAdcTask, 0); 
 
     // Ethernet task always sends data even if sensors didn't all read properly
-    ethTaskId         = *scheduler.AddTask(TransmitEthernetTask, 0);
+    ethTaskId             = *scheduler.AddTask(TransmitEthernetTask, 0);
 
     // Test task that counts up every time it's scheduled
-    testTaskId        = *scheduler.AddTask(TestCounterTask, 0);
+    testTaskId            = *scheduler.AddTask(TestCounterTask, 0);
 
     // On startup, schedule all tasks to run immediately
     uint32_t startTime = GetCurrentTime();
@@ -112,6 +140,7 @@ void GseController::Init() {
     scheduler.ScheduleTask(igniterTaskId, startTime);
     scheduler.ScheduleTask(alarmTaskId, startTime);
     scheduler.ScheduleTask(initInternalAdcTaskId, startTime);
+    scheduler.ScheduleTask(internalAdcTaskId, startTime);
     // WARNING currently breaks other tasks
     scheduler.ScheduleTask(initExtAdcTaskId, startTime);
     scheduler.ScheduleTask(tcTaskId, startTime);
@@ -140,6 +169,20 @@ void GseController::OnUartTx(UART_HandleTypeDef *huart) {
     }
 }
 
+void GseController::OnUartError(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART3) {
+        // Clear error flags and re-arm command reception
+        __HAL_UART_CLEAR_PEFLAG(huart);
+        __HAL_UART_CLEAR_FEFLAG(huart);
+        __HAL_UART_CLEAR_NEFLAG(huart);
+        __HAL_UART_CLEAR_OREFLAG(huart);
+        huart->ErrorCode = HAL_UART_ERROR_NONE;
+        huart->RxState = HAL_UART_STATE_READY;
+        huart->gState = HAL_UART_STATE_READY;
+        HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
+    }
+}
+
 void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
     if (hi2c->Instance == I2C1) {
         scheduler.ScheduleTask(fetchExtAdcTaskId, GetCurrentTime());
@@ -147,13 +190,12 @@ void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
 }
 
 void GseController::OnAdcDmaComplete(ADC_HandleTypeDef *hadc) {
-    if (hadc->Instance == ADC1) {
-        scheduler.ScheduleTask(fetchInternalAdcTaskId, GetCurrentTime());
-    }
+    // Unused in circular DMA mode (DMA continuously writes to adcDmaBuffer)
 }
 
 // --- Static task callbacks ---
 void GseController::ProcessCommandsTask() {
+    cmdTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
@@ -205,10 +247,14 @@ void GseController::ProcessCommandsTask() {
     instance->scheduler.ScheduleTask(instance->cmdTaskId, nextRun);
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgCmdTaskTime = (avgCmdTaskTime == 0.0f) ? (float)taskDelta : (avgCmdTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalCmdTaskTime += taskDelta;
+    if (cmdTaskRunCount > 0) {
+        avgCmdTaskTime = (float)totalCmdTaskTime / (float)cmdTaskRunCount;
+    }
 }
 
 void GseController::SwitchSolenoidsTask() {
+    solenoidTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
@@ -232,10 +278,14 @@ void GseController::SwitchSolenoidsTask() {
     instance->scheduler.ScheduleTask(instance->solenoidTaskId, nextRun);
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgSolenoidTaskTime = (avgSolenoidTaskTime == 0.0f) ? (float)taskDelta : (avgSolenoidTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalSolenoidTaskTime += taskDelta;
+    if (solenoidTaskRunCount > 0) {
+        avgSolenoidTaskTime = (float)totalSolenoidTaskTime / (float)solenoidTaskRunCount;
+    }
 }
 
 void GseController::FireIgnitersTask() {
+    igniterTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
@@ -262,10 +312,14 @@ void GseController::FireIgnitersTask() {
     instance->scheduler.ScheduleTask(instance->igniterTaskId, nextRun);
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgIgniterTaskTime = (avgIgniterTaskTime == 0.0f) ? (float)taskDelta : (avgIgniterTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalIgniterTaskTime += taskDelta;
+    if (igniterTaskRunCount > 0) {
+        avgIgniterTaskTime = (float)totalIgniterTaskTime / (float)igniterTaskRunCount;
+    }
 }
 
 void GseController::SetAlarmTask() {
+    alarmTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
@@ -278,31 +332,35 @@ void GseController::SetAlarmTask() {
     instance->scheduler.ScheduleTask(instance->alarmTaskId, nextRun);
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgAlarmTaskTime = (avgAlarmTaskTime == 0.0f) ? (float)taskDelta : (avgAlarmTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalAlarmTaskTime += taskDelta;
+    if (alarmTaskRunCount > 0) {
+        avgAlarmTaskTime = (float)totalAlarmTaskTime / (float)alarmTaskRunCount;
+    }
 }
 
 void GseController::InitiateInternalAdcTask() {
     uint32_t taskStartTime = GetCurrentTime();
 
-    static uint32_t nextRun = 0;
-    if (nextRun == 0) nextRun = GetCurrentTime();
-
-    // Kick off DMA transfer for all 14 ADC channels — returns immediately.
-    // When all conversions complete, DMA interrupt fires HAL_ADC_ConvCpltCallback,
-    // which schedules FetchInternalAdcTask to process the results.
+    // Start continuous circular DMA transfer for all 14 ADC channels (32-bit words).
+    // In circular mode, hardware continuously streams conversions into adcDmaBuffer
+    // with zero CPU intervention.
     HAL_ADC_Start_DMA(&hadc1, instance->adcDmaBuffer, 14);
 
-    nextRun += 10;
-    instance->scheduler.ScheduleTask(instance->initInternalAdcTaskId, nextRun);
+    // Note: Does NOT self-reschedule. This one-time task completes and remains dormant.
+    // ReadInternalAdcTask periodically reads the latest values from adcDmaBuffer.
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
     avgInternalAdcInitTaskTime = (avgInternalAdcInitTaskTime == 0.0f) ? (float)taskDelta : (avgInternalAdcInitTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
 }
 
-void GseController::FetchInternalAdcTask() {
+void GseController::ReadInternalAdcTask() {
+    internalAdcTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
-    // DMA has filled adcDmaBuffer with 14 channel values in rank order.
+    static uint32_t nextRun = 0;
+    if (nextRun == 0) nextRun = GetCurrentTime();
+
+    // DMA continuously updates adcDmaBuffer with all 14 channels in rank order.
     // Map the buffer through the Stm32AdcData struct for named access.
     Stm32AdcData rawData;
     memcpy(&rawData, instance->adcDmaBuffer, sizeof(Stm32AdcData));
@@ -323,11 +381,15 @@ void GseController::FetchInternalAdcTask() {
     instance->data.solenoidCurrent10  = 0.000817f * (float)rawData.s10;
     instance->data.solenoidCurrent11  = 0.000817f * (float)rawData.s11;
 
-    // Note: Does NOT self-reschedule. This task remains dormant until the next DMA
-    // transfer completes and the ISR schedules it again.
+    nextRun += 10;
+    instance->scheduler.ScheduleTask(instance->internalAdcTaskId, nextRun);
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgInternalAdcFetchTaskTime = (avgInternalAdcFetchTaskTime == 0.0f) ? (float)taskDelta : (avgInternalAdcFetchTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalInternalAdcTaskTime += taskDelta;
+    if (internalAdcTaskRunCount > 0) {
+        avgInternalAdcTaskTime = (float)totalInternalAdcTaskTime / (float)internalAdcTaskRunCount;
+        avgInternalAdcFetchTaskTime = avgInternalAdcTaskTime;
+    }
 }
 
 void GseController::InitiateExternalAdcReadTask() {
@@ -347,6 +409,7 @@ void GseController::InitiateExternalAdcReadTask() {
 }
 
 void GseController::ReadThermocouplesTask() {
+    tcTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
@@ -371,7 +434,10 @@ void GseController::ReadThermocouplesTask() {
     instance->scheduler.ScheduleTask(instance->tcTaskId, nextRun);
 
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgThermocoupleTaskTime = (avgThermocoupleTaskTime == 0.0f) ? (float)taskDelta : (avgThermocoupleTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalThermocoupleTaskTime += taskDelta;
+    if (tcTaskRunCount > 0) {
+        avgThermocoupleTaskTime = (float)totalThermocoupleTaskTime / (float)tcTaskRunCount;
+    }
 }
 
 void GseController::FetchExternalAdcTask() {
@@ -416,18 +482,27 @@ void GseController::FetchExternalAdcTask() {
     // Note: Does NOT self-reschedule. This task remains dormant until the ADC read completes and the ISR
     // schedules it manually again
 
+    externalAdcFetchRunCount++;
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgExternalAdcFetchTaskTime = (avgExternalAdcFetchTaskTime == 0.0f) ? (float)taskDelta : (avgExternalAdcFetchTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalExternalAdcFetchTaskTime += taskDelta;
+    if (externalAdcFetchRunCount > 0) {
+        avgExternalAdcFetchTaskTime = (float)totalExternalAdcFetchTaskTime / (float)externalAdcFetchRunCount;
+    }
 }
 
 void GseController::TransmitEthernetTask() {
+    ethTaskRunCount++;
     uint32_t taskStartTime = GetCurrentTime();
 
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
+    static uint32_t busyTicks = 0;
+
     // Only start a new transmission if the previous DMA transfer has completed
     if (huart3.gState == HAL_UART_STATE_READY) {
+        busyTicks = 0;
+
         // Ethernet - send freshest data regardless of dependencies
         instance->data.timestamp = GetCurrentTime(); 
 
@@ -445,12 +520,23 @@ void GseController::TransmitEthernetTask() {
 
         // Profile UART Transmit DMA initiation
         uint32_t uartStartTime = GetCurrentTime();
-        HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&instance->ethTxBuffer, sizeof(GseData));
+        if (HAL_UART_Transmit_DMA(&huart3, (uint8_t *)&instance->ethTxBuffer, sizeof(GseData)) != HAL_OK) {
+            HAL_UART_AbortTransmit(&huart3);
+        }
         uint32_t uartDelta = GetCurrentTime() - uartStartTime;
 
-        // Update Exponential Moving Averages (EMA) for live view stability (10% new, 90% history)
-        avgCrcTime = (avgCrcTime == 0.0f) ? (float)crcDelta : (avgCrcTime * 0.9f) + ((float)crcDelta * 0.1f);
-        avgUartTime = (avgUartTime == 0.0f) ? (float)uartDelta : (avgUartTime * 0.9f) + ((float)uartDelta * 0.1f);
+        ethTxRunCount++;
+        totalCrcTime += crcDelta;
+        avgCrcTime = (float)totalCrcTime / (float)ethTxRunCount;
+        totalUartTime += uartDelta;
+        avgUartTime = (float)totalUartTime / (float)ethTxRunCount;
+    } else {
+        // Watchdog: If UART remains busy for >50 ms (expected ~1.4 ms), abort stuck transfer to recover
+        busyTicks++;
+        if (busyTicks >= 5) {
+            HAL_UART_AbortTransmit(&huart3);
+            busyTicks = 0;
+        }
     }
 
     nextRun += 10;
@@ -458,7 +544,10 @@ void GseController::TransmitEthernetTask() {
 
     // Profile total task execution
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgEthTaskTime = (avgEthTaskTime == 0.0f) ? (float)taskDelta : (avgEthTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalEthTaskTime += taskDelta;
+    if (ethTaskRunCount > 0) {
+        avgEthTaskTime = (float)totalEthTaskTime / (float)ethTaskRunCount;
+    }
 }
 
 void GseController::TestCounterTask() {
@@ -480,7 +569,10 @@ void GseController::TestCounterTask() {
 
     // Profile total task execution
     uint32_t taskDelta = GetCurrentTime() - taskStartTime;
-    avgTestTaskTime = (avgTestTaskTime == 0.0f) ? (float)taskDelta : (avgTestTaskTime * 0.9f) + ((float)taskDelta * 0.1f);
+    totalTestTaskTime += taskDelta;
+    if (counter > 0) {
+        avgTestTaskTime = (float)totalTestTaskTime / (float)counter;
+    }
 }
 
 // --- Global C callback routers ---
@@ -494,6 +586,12 @@ extern "C" {
     void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
         if (GseController::instance) {
             GseController::instance->OnUartTx(huart);
+        }
+    }
+
+    void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+        if (GseController::instance) {
+            GseController::instance->OnUartError(huart);
         }
     }
 
