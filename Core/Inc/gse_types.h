@@ -89,6 +89,7 @@ struct GseData {
     uint32_t temperature2;
 
     // External ADC data
+    uint8_t externalAdcValidBitmask = 0;
     float pressure0 = std::nanf("");
     float pressure1 = std::nanf("");
     float pressure2 = std::nanf("");

@@ -84,9 +84,9 @@ void GseController::Init() {
     HAL_GPIO_WritePin(ETH_RST_GPIO_Port, ETH_RST_Pin, GPIO_PIN_SET);
     HAL_Delay(250); 
 
-    // tc0.Init();
-    // tc1.Init();
-    // tc2.Init();
+    tc0.Init();
+    tc1.Init();
+    tc2.Init();
 
     AdcMax11614i2c::Config adcConfig;
     external_adc.Init(adcConfig);
@@ -415,20 +415,20 @@ void GseController::ReadThermocouplesTask() {
     static uint32_t nextRun = 0;
     if (nextRun == 0) nextRun = GetCurrentTime();
 
-    // Read thermocouples (commented out for now)
-    // TcMax31855Spi::Data tcData;
-    // tcData = instance->tc0.Read();
-    // if (tcData.valid) {
-    //     instance->data.temperature0 = tcData.tcTemperature;
-    // }
-    // tcData = instance->tc1.Read();
-    // if (tcData.valid) {
-    //     instance->data.temperature1 = tcData.tcTemperature;
-    // }
-    // tcData = instance->tc2.Read();
-    // if (tcData.valid) {
-    //     instance->data.temperature2 = tcData.tcTemperature;
-    // }
+    // Read thermocouples
+    TcMax31855Spi::Data tcData;
+    tcData = instance->tc0.Read();
+    if (tcData.valid) {
+        instance->data.temperature0 = tcData.tcTemperature;
+    }
+    tcData = instance->tc1.Read();
+    if (tcData.valid) {
+        instance->data.temperature1 = tcData.tcTemperature;
+    }
+    tcData = instance->tc2.Read();
+    if (tcData.valid) {
+        instance->data.temperature2 = tcData.tcTemperature;
+    }
 
     nextRun += 10;
     instance->scheduler.ScheduleTask(instance->tcTaskId, nextRun);
@@ -451,30 +451,33 @@ void GseController::FetchExternalAdcTask() {
         if (optData.has_value()) {
             auto externalADCData = optData.value();
             
-            // For each channel, if we got data, convert from 0-4095 raw output to 0-5V digital voltage
-            if (externalADCData.channelOutput0 != -1) {
+            // Pass along valid channel bitmask
+            instance->data.externalAdcValidBitmask = externalADCData.channelValidBitmask;
+
+            // For each channel, if we got valid data, convert from 0-4095 raw output to 0-5V digital voltage
+            if (externalADCData.channelValidBitmask & (1 << 0)) {
                 instance->data.pressure0 = (externalADCData.channelOutput0 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
-            if (externalADCData.channelOutput1 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 1)) {
                 instance->data.pressure1 = (externalADCData.channelOutput1 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
-            if (externalADCData.channelOutput2 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 2)) {
                 instance->data.pressure2 = (externalADCData.channelOutput2 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
-            if (externalADCData.channelOutput3 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 3)) {
                 instance->data.pressure3 = (externalADCData.channelOutput3 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
             // Load cells
-            if (externalADCData.channelOutput4 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 4)) {
                 instance->data.loadCellForce2 = (externalADCData.channelOutput4 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
-            if (externalADCData.channelOutput5 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 5)) {
                 instance->data.loadCellForce3 = (externalADCData.channelOutput5 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
-            if (externalADCData.channelOutput6 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 6)) {
                 instance->data.loadCellForce4 = (externalADCData.channelOutput6 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
-            if (externalADCData.channelOutput7 != -1) {
+            if (externalADCData.channelValidBitmask & (1 << 7)) {
                 instance->data.loadCellForce5 = (externalADCData.channelOutput7 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
             }
         }

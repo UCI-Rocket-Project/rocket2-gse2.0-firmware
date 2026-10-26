@@ -19,7 +19,7 @@
             ]
         },
         {
-            "name": "Run Google Tests",
+            "name": "Google Tests: scheduler_tests",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/TestNative/tests/scheduler_tests",
@@ -38,6 +38,34 @@
                     "ignoreFailures": true
                 }
             ]
+        },
+        {
+            "name": "Google Tests: adc_tests",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/TestNative/tests/adc_tests",
+            "args": ["--gtest_color=yes"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                "description": "Enable pretty-printing for gdb",
+                "text": "-enable-pretty-printing",
+                "ignoreFailures": true
+                }
+            ]
+        }
+    ],
+    "compounds": [
+        {
+        "name": "Run all Google Tests",
+        "configurations": [
+            "Google Tests: scheduler_tests",
+            "Google Tests: adc_tests"
+        ]
         }
     ]
 }
