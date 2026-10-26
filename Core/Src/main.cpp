@@ -4,7 +4,7 @@
 #include "crc.h"
 #include "stm32f1xx_hal_i2c.h"
 #include "tc_max31855_spi.h"
-#include "adc_max11614_i2c.h"
+//#include "adc_max11614_i2c.h"
 
 #include <cmath>
 #include <cstdint>
@@ -134,8 +134,8 @@ void cpp_main(void)
     // tc2.Init();
 
     // External ADC setup
-    AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
-    external_adc.Init();
+    //AdcMax11614i2c external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin);
+    //external_adc.Init();
 
     /* init state stuff*/
     bool solenoidState0  = 0;
@@ -251,8 +251,8 @@ void cpp_main(void)
         for (int i = 0; i < 14; i++) {
             HAL_ADC_Start(&hadc1);
             HAL_ADC_PollForConversion(&hadc1, 10);
-            uint32_t data = HAL_ADC_GetValue(&hadc1);
-            *(((uint32_t *)&rawData) + i) += data;
+            uint32_t adc_data = HAL_ADC_GetValue(&hadc1);
+            *(((uint32_t *)&rawData) + i) += adc_data;
         }
 
         // update transmit data struct
@@ -260,16 +260,16 @@ void cpp_main(void)
         data.supplyVoltage1     = 0.0062f * (float)rawData.pwr1 + 0.435f;
         data.solenoidCurrent0   = 0.000817f * (float)rawData.s0;
         data.solenoidCurrent1   = 0.000817f * (float)rawData.s1;
-        data.solenoidCurrent2   = 0.000817f * (float)rawData.s0;
-        data.solenoidCurrent3   = 0.000817f * (float)rawData.s1;
-        data.solenoidCurrent4   = 0.000817f * (float)rawData.s0;
-        data.solenoidCurrent5   = 0.000817f * (float)rawData.s1;
-        data.solenoidCurrent6   = 0.000817f * (float)rawData.s0;
-        data.solenoidCurrent7   = 0.000817f * (float)rawData.s1;
-        data.solenoidCurrent8   = 0.000817f * (float)rawData.s0;
-        data.solenoidCurrent9   = 0.000817f * (float)rawData.s1;
-        data.solenoidCurrent10  = 0.000817f * (float)rawData.s0;
-        data.solenoidCurrent11  = 0.000817f * (float)rawData.s1;
+        data.solenoidCurrent2   = 0.000817f * (float)rawData.s2;
+        data.solenoidCurrent3   = 0.000817f * (float)rawData.s3;
+        data.solenoidCurrent4   = 0.000817f * (float)rawData.s4;
+        data.solenoidCurrent5   = 0.000817f * (float)rawData.s5;
+        data.solenoidCurrent6   = 0.000817f * (float)rawData.s6;
+        data.solenoidCurrent7   = 0.000817f * (float)rawData.s7;
+        data.solenoidCurrent8   = 0.000817f * (float)rawData.s8;
+        data.solenoidCurrent9   = 0.000817f * (float)rawData.s9;
+        data.solenoidCurrent10  = 0.000817f * (float)rawData.s10;
+        data.solenoidCurrent11  = 0.000817f * (float)rawData.s11;
         
         // read thermocouples
         // tcData = tc0.Read();
