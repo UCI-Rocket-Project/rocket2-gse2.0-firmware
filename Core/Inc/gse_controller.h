@@ -48,9 +48,9 @@ class GseController {
     TcMax31855Spi tc2;
 
     // Task scheduler setup
-    TaskScheduler<11, 3> scheduler;
+    TaskScheduler<10, 3> scheduler;
     size_t cmdTaskId, solenoidTaskId, igniterTaskId, alarmTaskId;
-    size_t initInternalAdcTaskId, internalAdcTaskId, initExtAdcTaskId, tcTaskId, fetchExtAdcTaskId, ethTaskId;
+    size_t initInternalAdcTaskId, internalAdcTaskId, initExtAdcTaskId, tcTaskId, ethTaskId;
     size_t testTaskId;
 
     // Task callbacks
@@ -62,7 +62,6 @@ class GseController {
     static void ReadInternalAdcTask();
     static void InitiateExternalAdcReadTask();
     static void ReadThermocouplesTask();
-    static void FetchExternalAdcTask();
     static void TransmitEthernetTask();
     static void TestCounterTask();
 };
