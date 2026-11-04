@@ -32,18 +32,6 @@ float avgExternalAdcInitTaskTime = 0.0f;
 float avgExternalAdcFetchTaskTime = 0.0f;
 float avgThermocoupleTaskTime = 0.0f;
 
-// --- TODO: delete these temp external ADC tracking variables ---
-float pressure0 = 0.0f;
-uint32_t channelValidBitmask = 0;
-uint16_t rawChannel0;
-uint16_t rawChannel1;
-uint16_t rawChannel2;
-uint16_t rawChannel3;
-uint16_t rawChannel4;
-uint16_t rawChannel5;
-uint16_t rawChannel6;
-uint16_t rawChannel7;
-
 // --- Task run counters (inspectable in Live Watch to confirm loop execution) ---
 volatile uint32_t cmdTaskRunCount = 0;
 volatile uint32_t solenoidTaskRunCount = 0;
@@ -232,22 +220,9 @@ void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
             // Pass along valid channel bitmask
             data.externalAdcValidBitmask = externalADCData.channelValidBitmask;
 
-            // TODO: remove this it's just for testing ADC
-            if (data.externalAdcValidBitmask == 255) {
-                rawChannel0 = externalADCData.channelOutput0;
-                rawChannel1 = externalADCData.channelOutput1;
-                rawChannel2 = externalADCData.channelOutput2;
-                rawChannel3 = externalADCData.channelOutput3;
-                rawChannel4 = externalADCData.channelOutput4;
-                rawChannel5 = externalADCData.channelOutput5;
-                rawChannel6 = externalADCData.channelOutput6;
-                rawChannel7 = externalADCData.channelOutput7;
-            }
-
             // For each channel, if we got valid data, convert from 0-4095 raw output to 0-5V digital voltage
             if (externalADCData.channelValidBitmask & (1 << 0)) {
                 data.pressure0 = (externalADCData.channelOutput0 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-                pressure0 = data.pressure0; // TODO: remove
             }
             if (externalADCData.channelValidBitmask & (1 << 1)) {
                 data.pressure1 = (externalADCData.channelOutput1 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
