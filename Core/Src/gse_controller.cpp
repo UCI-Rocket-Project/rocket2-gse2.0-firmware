@@ -207,7 +207,6 @@ void GseController::OnUartError(UART_HandleTypeDef *huart) {
 void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
     if (hi2c->Instance != I2C1) return;
     uint32_t taskStartTime = GetProfileTimeCycles();
-    channelValidBitmask = external_adc.GetchannelValidBitmask();
 
     // The HAL callback has marked the completed read ready; fetching resets the driver to IDLE.
     if (external_adc.IsDataReady()) {
