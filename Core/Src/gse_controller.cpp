@@ -1,6 +1,7 @@
 #include "gse_controller.h"
 #include "crc.h"
 #include <cstddef>
+#include <cstdint>
 
 // Define external HAL handles
 extern ADC_HandleTypeDef hadc1;
@@ -55,6 +56,11 @@ uint64_t totalAlarmTaskTime = 0;
 uint64_t totalInternalAdcTaskTime = 0;
 uint64_t totalThermocoupleTaskTime = 0;
 uint64_t totalExternalAdcFetchTaskTime = 0;
+
+// TODO: delete temp variables
+bool testNewCommand = false;
+uint32_t testCRC1 = 0;
+uint32_t testCRC2 = 0;
 
 /**
  * @brief Reads the chained hardware timers in milliseconds for scheduling and telemetry.
@@ -115,15 +121,6 @@ void GseController::Init() {
     AdcMax11614i2c::Config adcConfig;
     external_adc.Init(adcConfig);
 
-    // Reconfigure ADC1 for continuous scan mode with circular DMA:
-    // All 14 channels are converted continuously in hardware into adcDmaBuffer.
-    hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
-    hadc1.Init.ContinuousConvMode = ENABLE;
-    hadc1.Init.DiscontinuousConvMode = DISABLE;
-    hadc1.Init.NbrOfConversion = 14;
-    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
-        Error_Handler();
-    }
     HAL_ADCEx_Calibration_Start(&hadc1);
 
     HAL_TIM_Base_Start(&htim4);
@@ -177,9 +174,12 @@ void GseController::Run() {
 // Hardware interrupt routers, internal logic to attach to extern C block
 void GseController::OnUartRx(UART_HandleTypeDef *huart) {
     uint32_t crc = Crc32(commandBuffer, sizeof(GseCommand) - 4);
+    testCRC1 = crc;
+    testCRC2 = ((GseCommand *)commandBuffer)->crc;
     if (crc == ((GseCommand *)commandBuffer)->crc) {
         memcpy((uint8_t *)&command, commandBuffer, sizeof(GseCommand));
         newCommand = true;
+        testNewCommand = true;
     }
     HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
 }
@@ -269,6 +269,7 @@ void GseController::ProcessCommandsTask() {
     // Update internal states from new ethernet command
     if (instance->newCommand) {
         instance->newCommand = false;
+        testNewCommand = false;
         instance->igniterState0       = instance->command.igniter0Fire;
         instance->igniterState1       = instance->command.igniter1Fire;
         instance->alarmState          = instance->command.alarm;
@@ -494,8 +495,6 @@ void GseController::TransmitEthernetTask() {
         uint32_t crcDelta = GetProfileTimeCycles() - crcStartTime;
 
         instance->data.crc = crc;
-        // Set last two bytes to 0x67
-        instance->data.crc = 0x67676767;
 
         // Snapshot to separate TX buffer to prevent data tearing and CRC mismatch during background DMA
         memcpy(&instance->ethTxBuffer, &instance->data, sizeof(GseData));
