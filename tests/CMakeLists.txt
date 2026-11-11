@@ -16,10 +16,15 @@ FetchContent_MakeAvailable(googletest)
 # Define the test executables
 add_executable(scheduler_tests test_task_scheduler.cpp)
 add_executable(adc_tests test_adc_max11614.cpp)
+add_executable(command_tests
+  test_uart_command_receiver.cpp
+  ${CMAKE_SOURCE_DIR}/Core/Src/uart_command_receiver.cpp
+)
 
 # Link Google Test to executables
 target_link_libraries(scheduler_tests PRIVATE gtest_main gtest pthread)
 target_link_libraries(adc_tests PRIVATE gtest_main gtest pthread)
+target_link_libraries(command_tests PRIVATE gtest_main gtest pthread)
 
 # Map dependencies to each test suite
 target_include_directories(scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR})
@@ -29,8 +34,13 @@ target_include_directories(adc_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/RocketDrivers/adc_max11614_i2c 
   ${CMAKE_SOURCE_DIR}/Core/Inc
 )
+target_include_directories(command_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/mock_hal
+  ${CMAKE_SOURCE_DIR}/Core/Inc
+)
 
 # Register tests with CTest
 include(GoogleTest)
 gtest_discover_tests(scheduler_tests)
 gtest_discover_tests(adc_tests)
+gtest_discover_tests(command_tests)

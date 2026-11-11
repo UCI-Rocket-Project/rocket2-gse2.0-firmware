@@ -64,6 +64,7 @@ if(CMAKE_C_COMPILER MATCHES "arm-none-eabi")
         ${ALL_DRIVER_SOURCES}
         Core/Src/main.cpp
         Core/Src/gse_controller.cpp
+        Core/Src/uart_command_receiver.cpp
     )
 
     # Add include paths

@@ -57,11 +57,6 @@ uint64_t totalInternalAdcTaskTime = 0;
 uint64_t totalThermocoupleTaskTime = 0;
 uint64_t totalExternalAdcFetchTaskTime = 0;
 
-// TODO: delete temp variables
-bool testNewCommand = false;
-uint32_t testCRC1 = 0;
-uint32_t testCRC2 = 0;
-
 /**
  * @brief Reads the chained hardware timers in milliseconds for scheduling and telemetry.
  */
@@ -99,7 +94,8 @@ inline float ProfileCyclesToMs(uint64_t cycles) {
 } // namespace
 
 GseController::GseController()
-    : external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin, EXT_ADC_SDA_GPIO_Port, EXT_ADC_SDA_Pin),
+    : commandReceiver(&huart3),
+      external_adc(&hi2c1, EXT_ADC_SCL_GPIO_Port, EXT_ADC_SCL_Pin, EXT_ADC_SDA_GPIO_Port, EXT_ADC_SDA_Pin),
       tc0(&hspi3, TC0_CS_GPIO_Port, TC0_CS_Pin, 100),
       tc1(&hspi3, TC1_CS_GPIO_Port, TC1_CS_Pin, 100),
       tc2(&hspi3, TC2_CS_GPIO_Port, TC2_CS_Pin, 100),
@@ -127,7 +123,7 @@ void GseController::Init() {
     HAL_TIM_Base_Start(&htim5);
     InitProfileClock();
 
-    HAL_UART_Receive_IT(&huart3, commandBuffer, sizeof(GseCommand));
+    commandReceiver.Start();
 
     // --- Task ID registration ---
     // Note the number of dependencies for each task
@@ -178,15 +174,9 @@ void GseController::Run() {
 
 // Hardware interrupt routers, internal logic to attach to extern C block
 void GseController::OnUartRx(UART_HandleTypeDef *huart) {
-    uint32_t crc = Crc32(commandBuffer, sizeof(GseCommand) - 4);
-    testCRC1 = crc;
-    testCRC2 = ((GseCommand *)commandBuffer)->crc;
-    if (crc == ((GseCommand *)commandBuffer)->crc) {
-        memcpy((uint8_t *)&command, commandBuffer, sizeof(GseCommand));
-        newCommand = true;
-        testNewCommand = true;
+    if (huart->Instance == USART3) {
+        commandReceiver.OnRxComplete();
     }
-    HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
 }
 
 void GseController::OnUartTx(UART_HandleTypeDef *huart) {
@@ -197,15 +187,7 @@ void GseController::OnUartTx(UART_HandleTypeDef *huart) {
 
 void GseController::OnUartError(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART3) {
-        // Clear error flags and re-arm command reception
-        __HAL_UART_CLEAR_PEFLAG(huart);
-        __HAL_UART_CLEAR_FEFLAG(huart);
-        __HAL_UART_CLEAR_NEFLAG(huart);
-        __HAL_UART_CLEAR_OREFLAG(huart);
-        huart->ErrorCode = HAL_UART_ERROR_NONE;
-        huart->RxState = HAL_UART_STATE_READY;
-        huart->gState = HAL_UART_STATE_READY;
-        HAL_UART_Receive_IT(huart, commandBuffer, sizeof(GseCommand));
+        commandReceiver.OnError();
     }
 }
 
@@ -224,10 +206,8 @@ void GseController::ProcessCommandsTask() {
     uint32_t taskStartTime = GetProfileTimeCycles();
     instance->scheduler.ScheduleTaskDeltaTime(instance->cmdTaskId, taskPeriodMs);
     
-    // Update internal states from new ethernet command
-    if (instance->newCommand) {
-        instance->newCommand = false;
-        testNewCommand = false;
+    // Accept at most one validated command per cycle in FIFO order
+    if (instance->commandReceiver.ReadCommand(instance->command)) {
         instance->igniterState0       = instance->command.igniter0Fire;
         instance->igniterState1       = instance->command.igniter1Fire;
         instance->alarmState          = instance->command.alarm;
@@ -262,7 +242,7 @@ void GseController::ProcessCommandsTask() {
     instance->data.solenoidInternalState10    = instance->solenoidState10;
     instance->data.solenoidInternalState11    = instance->solenoidState11;
 
-    // Trigger downstream Actuation Tasks
+    // Trigger downstream actuation tasks now that we possibly have new commanded states
     instance->scheduler.SetDependency(instance->solenoidTaskId, 0, true);
     instance->scheduler.SetDependency(instance->igniterTaskId, 0, true);
     instance->scheduler.SetDependency(instance->alarmTaskId, 0, true);

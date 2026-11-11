@@ -5,6 +5,7 @@
 #include "task_scheduler.h"
 #include "adc_max11614_i2c.h"
 #include "tc_max31855_spi.h"
+#include "uart_command_receiver.h"
 
 // The main state/task owner, responsible for containing all GSE tasks through the task scheduler
 class GseController {
@@ -26,10 +27,9 @@ class GseController {
 
   private:
     // Internal state variables
-    bool newCommand = false;
-    volatile bool i2cRxPending = false;
+    volatile bool externalADCRxPending = false;
     GseCommand command;
-    uint8_t commandBuffer[sizeof(GseCommand)];
+    UartCommandReceiver commandReceiver;
     GseData data;
     GseData ethTxBuffer;
 
