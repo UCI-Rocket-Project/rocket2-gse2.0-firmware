@@ -151,6 +151,9 @@ void GseController::Init() {
     // Test task that counts up every time it's scheduled
     testTaskId            = *scheduler.AddTask(TestCounterTask, 0);
 
+    // Deferred receive processing
+    i2cRxTaskId           = *scheduler.AddTask(FetchExternalADCDataTask, 0);
+
     // On startup, schedule all tasks to run immediately
     uint32_t startTime = GetCurrentTime();
     scheduler.ScheduleTaskTargetTime(testTaskId, startTime);
@@ -160,6 +163,8 @@ void GseController::Init() {
     scheduler.ScheduleTaskTargetTime(alarmTaskId, startTime);
     scheduler.ScheduleTaskTargetTime(initInternalAdcTaskId, startTime);
     scheduler.ScheduleTaskTargetTime(internalAdcTaskId, startTime);
+    // Consume completed data before attempting the next external ADC read.
+    scheduler.ScheduleTaskTargetTime(i2cRxTaskId, startTime);
     scheduler.ScheduleTaskTargetTime(initExtAdcTaskId, startTime);
     scheduler.ScheduleTaskTargetTime(tcTaskId, startTime);
     scheduler.ScheduleTaskTargetTime(ethTaskId, startTime);
@@ -206,54 +211,7 @@ void GseController::OnUartError(UART_HandleTypeDef *huart) {
 
 void GseController::OnI2cRx(I2C_HandleTypeDef *hi2c) {
     if (hi2c->Instance != I2C1) return;
-    uint32_t taskStartTime = GetProfileTimeCycles();
-
-    // The HAL callback has marked the completed read ready; fetching resets the driver to IDLE.
-    if (external_adc.IsDataReady()) {
-        auto optData = external_adc.FetchData();
-
-        // For overall data structure, only use if we got a successful read
-        if (optData.has_value()) {
-            auto externalADCData = optData.value();
-
-            // Pass along valid channel bitmask
-            data.externalAdcValidBitmask = externalADCData.channelValidBitmask;
-
-            // For each channel, if we got valid data, convert from 0-4095 raw output to 0-5V digital voltage
-            if (externalADCData.channelValidBitmask & (1 << 0)) {
-                data.pressure0 = (externalADCData.channelOutput0 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            if (externalADCData.channelValidBitmask & (1 << 1)) {
-                data.pressure1 = (externalADCData.channelOutput1 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            if (externalADCData.channelValidBitmask & (1 << 2)) {
-                data.pressure2 = (externalADCData.channelOutput2 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            if (externalADCData.channelValidBitmask & (1 << 3)) {
-                data.pressure3 = (externalADCData.channelOutput3 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            // Load cells
-            if (externalADCData.channelValidBitmask & (1 << 4)) {
-                data.loadCellForce2 = (externalADCData.channelOutput4 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            if (externalADCData.channelValidBitmask & (1 << 5)) {
-                data.loadCellForce3 = (externalADCData.channelOutput5 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            if (externalADCData.channelValidBitmask & (1 << 6)) {
-                data.loadCellForce4 = (externalADCData.channelOutput6 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-            if (externalADCData.channelValidBitmask & (1 << 7)) {
-                data.loadCellForce5 = (externalADCData.channelOutput7 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
-            }
-        }
-    }
-
-    externalAdcFetchRunCount++;
-    uint32_t taskDelta = GetProfileTimeCycles() - taskStartTime;
-    totalExternalAdcFetchTaskTime += taskDelta;
-    if (externalAdcFetchRunCount > 0) {
-        avgExternalAdcFetchTaskTime = ProfileCyclesToMs(totalExternalAdcFetchTaskTime) / (float)externalAdcFetchRunCount;
-    }
+    externalADCRxPending = true;
 }
 
 void GseController::OnAdcDmaComplete(ADC_HandleTypeDef *hadc) {
@@ -391,7 +349,7 @@ void GseController::InitiateInternalAdcTask() {
 
     // Start continuous circular DMA transfer for all 14 ADC channels (32-bit words).
     // In circular mode, hardware continuously streams conversions into adcDmaBuffer
-    // with zero CPU intervention.
+    // without CPU intervention.
     HAL_ADC_Start_DMA(&hadc1, instance->adcDmaBuffer, 14);
 
     // Note: Does NOT self-reschedule. This one-time task completes and remains dormant.
@@ -446,6 +404,61 @@ void GseController::InitiateExternalAdcReadTask() {
     uint32_t taskDelta = GetProfileTimeCycles() - taskStartTime;
     float taskTimeMs = ProfileCyclesToMs(taskDelta);
     avgExternalAdcInitTaskTime = (avgExternalAdcInitTaskTime == 0.0f) ? taskTimeMs : (avgExternalAdcInitTaskTime * 0.9f) + (taskTimeMs * 0.1f);
+}
+
+void GseController::FetchExternalADCDataTask() {
+    instance->scheduler.ScheduleTaskDeltaTime(instance->i2cRxTaskId, taskPeriodMs);
+    if (!instance->externalADCRxPending) return;
+
+    uint32_t taskStartTime = GetProfileTimeCycles();
+
+    // The HAL callback has marked the completed read ready; fetching resets the driver to IDLE.
+    if (instance->external_adc.IsDataReady()) {
+        auto optData = instance->external_adc.FetchData();
+
+        // For overall data structure, only use if we got a successful read
+        if (optData.has_value()) {
+            auto externalADCData = optData.value();
+
+            // Pass along valid channel bitmask
+            instance->data.externalAdcValidBitmask = externalADCData.channelValidBitmask;
+
+            // For each channel, if we got valid data, convert from 0-4095 raw output to 0-5V digital voltage
+            if (externalADCData.channelValidBitmask & (1 << 0)) {
+                instance->data.pressure0 = (externalADCData.channelOutput0 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            if (externalADCData.channelValidBitmask & (1 << 1)) {
+                instance->data.pressure1 = (externalADCData.channelOutput1 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            if (externalADCData.channelValidBitmask & (1 << 2)) {
+                instance->data.pressure2 = (externalADCData.channelOutput2 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            if (externalADCData.channelValidBitmask & (1 << 3)) {
+                instance->data.pressure3 = (externalADCData.channelOutput3 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            // Load cells
+            if (externalADCData.channelValidBitmask & (1 << 4)) {
+                instance->data.loadCellForce2 = (externalADCData.channelOutput4 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            if (externalADCData.channelValidBitmask & (1 << 5)) {
+                instance->data.loadCellForce3 = (externalADCData.channelOutput5 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            if (externalADCData.channelValidBitmask & (1 << 6)) {
+                instance->data.loadCellForce4 = (externalADCData.channelOutput6 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+            if (externalADCData.channelValidBitmask & (1 << 7)) {
+                instance->data.loadCellForce5 = (externalADCData.channelOutput7 / (float)AdcMax11614i2c::maxChannelOutput) * 5.0f;
+            }
+        }
+    }
+
+    externalAdcFetchRunCount++;
+    uint32_t taskDelta = GetProfileTimeCycles() - taskStartTime;
+    totalExternalAdcFetchTaskTime += taskDelta;
+    if (externalAdcFetchRunCount > 0) {
+        avgExternalAdcFetchTaskTime = ProfileCyclesToMs(totalExternalAdcFetchTaskTime) / (float)externalAdcFetchRunCount;
+    }
+    instance->externalADCRxPending = false;
 }
 
 void GseController::ReadThermocouplesTask() {

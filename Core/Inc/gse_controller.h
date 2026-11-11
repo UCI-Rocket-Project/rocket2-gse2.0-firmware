@@ -27,6 +27,7 @@ class GseController {
   private:
     // Internal state variables
     bool newCommand = false;
+    volatile bool i2cRxPending = false;
     GseCommand command;
     uint8_t commandBuffer[sizeof(GseCommand)];
     GseData data;
@@ -48,12 +49,14 @@ class GseController {
     TcMax31855Spi tc2;
 
     // Task scheduler setup
-    TaskScheduler<10, 3> scheduler;
+    TaskScheduler<12, 3> scheduler;
     size_t cmdTaskId, solenoidTaskId, igniterTaskId, alarmTaskId;
     size_t initInternalAdcTaskId, internalAdcTaskId, initExtAdcTaskId, tcTaskId, ethTaskId;
     size_t testTaskId;
+    size_t i2cRxTaskId;
 
     // Task callbacks
+    static void FetchExternalADCDataTask();
     static void ProcessCommandsTask();
     static void SwitchSolenoidsTask();
     static void FireIgnitersTask();
